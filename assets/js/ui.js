@@ -1,5 +1,5 @@
 (function () {
-  const cfg = window.AEGIS_CONFIG;
+  const cfg = window.SENTRY_CONFIG;
   const S = 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"';
 
   const ICONS = {
@@ -103,7 +103,7 @@
       <div class="brand">
         <div class="brand-mark">${icon("shieldCheck", 17)}</div>
         <div>
-          <div class="brand-name">AEGIS<span>NN</span></div>
+          <div class="brand-name">SENTRY<span>NN</span></div>
           <div class="brand-sub">DDoS Detection</div>
         </div>
       </div>
@@ -147,7 +147,7 @@
     });
 
     const src = document.getElementById("sb-source");
-    if (src && window.AEGIS_API.isLive()) src.textContent = "Live model stream";
+    if (src && window.SENTRY_API.isLive()) src.textContent = "Live model stream";
   }
 
   let toastTimer;
@@ -184,5 +184,5 @@
     }
   };
 
-  window.AEGIS_UI = { icon, mountSidebar, toast, fmt, ICONS };
+  window.SENTRY_UI = { icon, mountSidebar, toast, fmt, ICONS };
 })();

@@ -1,4 +1,4 @@
-# AEGIS NN — DDoS Detection Dashboard
+# SENTRY NN — DDoS Detection Dashboard
 
 Front-end for a PyTorch neural network that classifies network flows as benign or
 attack traffic, trained on **CIC-IDS2017**. Built as a single centralised console so one
@@ -31,7 +31,7 @@ Opening `index.html` directly via `file://` also works, though a server is recom
 ```bash
 git init
 git add .
-git commit -m "Add AEGIS DDoS detection dashboard UI"
+git commit -m "Add SENTRY DDoS detection dashboard UI"
 git branch -M main
 git remote add origin https://github.com/<you>/<repo>.git
 git push -u origin main

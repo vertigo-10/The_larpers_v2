@@ -1,5 +1,5 @@
 (function () {
-  const cfg = window.AEGIS_CONFIG;
+  const cfg = window.SENTRY_CONFIG;
 
   const state = {
     baseline: 640,
@@ -179,7 +179,7 @@
     }));
   }
 
-  window.AEGIS_MOCK = {
+  window.SENTRY_MOCK = {
     seedHistory, nextPoint, nextFlow, summary,
     classBreakdown, nodeTraffic, portActivity, nodeStats,
     phase: () => state.attackPhase

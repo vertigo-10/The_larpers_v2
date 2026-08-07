@@ -1,4 +1,4 @@
-window.AEGIS_CONFIG = {
+window.SENTRY_CONFIG = {
   apiBaseUrl: "",
   wsUrl: "",
   useMockData: true,
@@ -8,7 +8,7 @@ window.AEGIS_CONFIG = {
   historyPoints: 90,
   org: "Northgate Systems",
   operator: { name: "Jude Mekat", role: "Security Operations Lead", initials: "JM" },
-  model: { name: "aegis-ddos-v1", framework: "PyTorch", dataset: "CIC-IDS2017", accuracy: 99.2 },
+  model: { name: "sentry-ddos-v1", framework: "PyTorch", dataset: "CIC-IDS2017", accuracy: 99.2 },
   classes: ["BENIGN", "DDoS", "DoS Hulk", "PortScan", "Bot", "FTP-Patator"],
   nodes: [
     { id: "edge-01", label: "EDGE-01", desc: "Core edge router" },
@@ -22,17 +22,17 @@ window.AEGIS_CONFIG = {
   ]
 };
 
-window.AEGIS_SETTINGS_KEY = "aegis.settings";
+window.SENTRY_SETTINGS_KEY = "sentry.settings";
 
 // Settings page writes overrides here so the backend can be pointed at a real
 // service without editing this file.
 (function () {
   try {
-    const saved = JSON.parse(localStorage.getItem(window.AEGIS_SETTINGS_KEY) || "{}");
+    const saved = JSON.parse(localStorage.getItem(window.SENTRY_SETTINGS_KEY) || "{}");
     ["apiBaseUrl", "wsUrl", "useMockData", "pollIntervalMs", "flowIntervalMs", "maxTableRows", "org"]
-      .forEach(k => { if (saved[k] !== undefined) window.AEGIS_CONFIG[k] = saved[k]; });
-    if (saved.operator) Object.assign(window.AEGIS_CONFIG.operator, saved.operator);
+      .forEach(k => { if (saved[k] !== undefined) window.SENTRY_CONFIG[k] = saved[k]; });
+    if (saved.operator) Object.assign(window.SENTRY_CONFIG.operator, saved.operator);
   } catch (err) {
-    console.warn("[aegis] could not read saved settings:", err.message);
+    console.warn("[sentry] could not read saved settings:", err.message);
   }
 })();

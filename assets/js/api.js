@@ -1,6 +1,6 @@
 (function () {
-  const cfg = window.AEGIS_CONFIG;
-  const mock = window.AEGIS_MOCK;
+  const cfg = window.SENTRY_CONFIG;
+  const mock = window.SENTRY_MOCK;
 
   const live = { connected: false, socket: null, listeners: [], degraded: false };
 
@@ -22,7 +22,7 @@
       return data;
     } catch (err) {
       live.degraded = true;
-      console.warn(`[aegis] ${path} unavailable, using mock:`, err.message);
+      console.warn(`[sentry] ${path} unavailable, using mock:`, err.message);
       return fallback();
     }
   }
@@ -92,7 +92,7 @@
         };
         return true;
       } catch (err) {
-        console.warn("[aegis] websocket failed:", err.message);
+        console.warn("[sentry] websocket failed:", err.message);
         return false;
       }
     },
@@ -102,5 +102,5 @@
     isDegraded: () => live.degraded
   };
 
-  window.AEGIS_API = api;
+  window.SENTRY_API = api;
 })();

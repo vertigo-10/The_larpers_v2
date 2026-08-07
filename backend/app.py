@@ -1,4 +1,4 @@
-"""FastAPI stub for the AEGIS dashboard.
+"""FastAPI stub for the SENTRY dashboard.
 
 Replace `classify()` with a call into your trained PyTorch model. Every other
 endpoint already returns the shape the UI expects, so the dashboard will light up
@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="AEGIS DDoS Detection API")
+app = FastAPI(title="SENTRY DDoS Detection API")
 
 # Tighten this to the dashboard's real origin before deploying.
 app.add_middleware(
@@ -45,7 +45,7 @@ STATE: dict[str, Any] = {"threshold": 0.85, "blocked": 0, "flow_seq": 1000}
 # ── model ─────────────────────────────────────────────────────────────────
 #
 # import torch
-# MODEL = torch.jit.load("aegis_ddos_v1.pt")
+# MODEL = torch.jit.load("sentry_ddos_v1.pt")
 # MODEL.eval()
 #
 # def classify(features: list[float]) -> tuple[str, float]:
@@ -96,7 +96,7 @@ def next_flow() -> dict[str, Any]:
 @app.get("/api/status")
 def status():
     return {
-        "model": "aegis-ddos-v1",
+        "model": "sentry-ddos-v1",
         "framework": "PyTorch",
         "dataset": "CIC-IDS2017",
         "accuracy": 99.2,

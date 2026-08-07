@@ -1,7 +1,7 @@
 (function () {
-  const cfg = window.AEGIS_CONFIG;
-  const KEY = window.AEGIS_SETTINGS_KEY;
-  const { icon, mountSidebar, toast } = window.AEGIS_UI;
+  const cfg = window.SENTRY_CONFIG;
+  const KEY = window.SENTRY_SETTINGS_KEY;
+  const { icon, mountSidebar, toast } = window.SENTRY_UI;
 
   const el = (id) => document.getElementById(id);
 
@@ -86,7 +86,7 @@
     const blob = new Blob([JSON.stringify(collect(), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "aegis-settings.json";
+    a.download = "sentry-settings.json";
     a.click();
     URL.revokeObjectURL(a.href);
     toast("Configuration downloaded");

@@ -1,7 +1,7 @@
 (function () {
-  const cfg = window.AEGIS_CONFIG;
-  const api = window.AEGIS_API;
-  const { icon, mountSidebar, toast, fmt } = window.AEGIS_UI;
+  const cfg = window.SENTRY_CONFIG;
+  const api = window.SENTRY_API;
+  const { icon, mountSidebar, toast, fmt } = window.SENTRY_UI;
 
   const TAGS = {
     "DDoS": "tag-ddos", "DoS Hulk": "tag-dos", "PortScan": "tag-scan",

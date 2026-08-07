@@ -1,7 +1,7 @@
 (function () {
-  const cfg = window.AEGIS_CONFIG;
-  const api = window.AEGIS_API;
-  const { icon, mountSidebar, toast, fmt } = window.AEGIS_UI;
+  const cfg = window.SENTRY_CONFIG;
+  const api = window.SENTRY_API;
+  const { icon, mountSidebar, toast, fmt } = window.SENTRY_UI;
 
   const CLASS_COLORS = {
     "BENIGN": "#2fe08a",
@@ -582,7 +582,7 @@
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `aegis-flows-${Date.now()}.csv`;
+    a.download = `sentry-flows-${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
     toast(`Exported ${store.flows.length} flows`);
