@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AEGIS NN — Live Network Threat Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Live Overview</h1>
+      <span class="crumb">/ all networks</span>
+      <div class="topbar-right">
+        <span class="pill live" id="stream-pill"><span class="dot pulse"></span> Live</span>
+        <button class="pill" id="btn-threats"></button>
+        <button class="pill" id="btn-refresh"></button>
+        <button class="btn btn-primary" id="btn-export"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">JM</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- headline chart + detection console -->
+      <div class="grid-top">
+        <section class="panel chart-panel">
+          <div class="chart-head">
+            <div class="chart-id">
+              <div class="asset-badge">
+                <span class="ico" id="asset-ico"></span>
+                <b id="asset-name">ALL NODES</b>
+                <svg class="chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+              </div>
+              <div class="headline" id="headline">
+                <span id="headline-val">0</span><span class="unit">Mbps aggregate</span>
+              </div>
+              <div class="chart-tools">
+                <div class="seg" id="range-seg">
+                  <button data-range="5m">5m</button>
+                  <button data-range="15m" class="on">15m</button>
+                  <button data-range="1h">1h</button>
+                  <button data-range="24h">24h</button>
+                </div>
+                <button class="tool" id="tool-expand" title="Fullscreen"></button>
+                <button class="tool" id="tool-filter" title="Filter classes"></button>
+                <button class="tool" id="tool-camera" title="Snapshot"></button>
+              </div>
+            </div>
+
+            <div class="chart-meta">
+              <span><b>Node:</b> aggregate of <span class="k" id="meta-nodes">8</span> monitored links</span>
+              <span><b>Peak:</b> <span class="k up" id="meta-high">0</span></span>
+              <span><b>Floor:</b> <span class="k down" id="meta-low">0</span></span>
+              <span><b>24h packets:</b> <span class="k" id="meta-vol">0</span></span>
+              <span><b>Threat score:</b> <span class="k" id="meta-threat">0.0</span></span>
+            </div>
+          </div>
+
+          <div class="chart-body">
+            <canvas id="mainChart"></canvas>
+          </div>
+
+          <div class="chart-legend">
+            <span><i style="background:#2fe08a"></i>Throughput (Mbps)</span>
+            <span><i style="background:#ff5064"></i>Threat score (0–100)</span>
+            <span><i style="background:#4fb8f7"></i>Detection threshold</span>
+          </div>
+
+          <div class="chart-nodes" id="node-chips"></div>
+        </section>
+
+        <!-- detection console -->
+        <aside class="panel console">
+          <div class="console-tabs">
+            <button class="on" data-mode="auto">Autonomous</button>
+            <button data-mode="manual">Manual</button>
+          </div>
+
+          <div class="console-body">
+            <div>
+              <div class="field-label">Current network verdict</div>
+              <div class="verdict">
+                <button class="v-threat" id="v-threat">THREAT</button>
+                <button class="v-clear on" id="v-clear">NORMAL</button>
+              </div>
+            </div>
+
+            <div>
+              <div class="field-label">Monitored scope</div>
+              <div class="input-row">
+                <span class="lead">◎</span>
+                <input type="text" id="scope-input" value="all-networks" />
+                <div class="stepper">
+                  <button data-scope="edge">edge</button>
+                  <button data-scope="core">core</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="dual">
+              <div>
+                <div class="field-label">Sensitivity</div>
+                <div class="input-row" style="padding:7px 9px">
+                  <span style="color:var(--muted);font-size:11px">τ</span>
+                  <input type="text" id="threshold-val" value="0.85" readonly />
+                </div>
+              </div>
+              <div>
+                <div class="field-label">Model confidence</div>
+                <div class="big-metric risk-low" id="confidence-val">0.00</div>
+              </div>
+            </div>
+
+            <div class="slider-wrap">
+              <input type="range" min="50" max="99" value="85" class="slider" id="threshold-slider" />
+              <div class="slider-scale">
+                <span>Permissive · fewer alerts</span>
+                <span>Aggressive · x1000</span>
+              </div>
+            </div>
+
+            <div class="checks">
+              <label class="check">
+                <input type="checkbox" id="chk-auto" checked />
+                <span class="box"><svg viewBox="0 0 24 24"><path d="m4 12 5 5L20 6" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/></svg></span>
+                <span>Auto-mitigate</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="chk-alert" checked />
+                <span class="box"><svg viewBox="0 0 24 24"><path d="m4 12 5 5L20 6" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/></svg></span>
+                <span>Webhook alerts</span>
+              </label>
+            </div>
+
+            <button class="action-btn" id="btn-mitigate">ENGAGE MITIGATION</button>
+
+            <div style="display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--muted)">
+              <span id="ico-info"></span>
+              <span>Rules apply to every flow scored above τ.</span>
+            </div>
+          </div>
+
+          <div class="console-foot">
+            <span id="foot-model">aegis-ddos-v1 · PyTorch</span>
+            <span id="foot-latency">— ms</span>
+          </div>
+        </aside>
+      </div>
+
+      <!-- KPI strip -->
+      <div class="stat-strip" id="stat-strip"></div>
+
+      <!-- analytics row -->
+      <div class="mini-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Predicted classes · last hour</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">CIC-IDS2017 labels</span></div>
+          </div>
+          <div class="mini-body"><canvas id="classChart"></canvas></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Load by router</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">Mbps</span></div>
+          </div>
+          <div class="mini-body"><canvas id="nodeChart"></canvas></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Destination port activity</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">flows/min</span></div>
+          </div>
+          <div class="mini-body"><canvas id="portChart"></canvas></div>
+        </section>
+      </div>
+
+      <!-- live flow table -->
+      <section class="panel">
+        <div class="table-tabs" id="table-tabs">
+          <button class="on" data-tab="live">Live Activity</button>
+          <button data-tab="flagged">Flagged</button>
+          <button data-tab="mitigated">Mitigated</button>
+          <button data-tab="log">Model Log</button>
+          <div class="right">
+            <button class="pill" id="btn-pause"></button>
+            <button class="pill" id="btn-csv"></button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Flow</th>
+                <th>Source IP</th>
+                <th>Router</th>
+                <th>Dst port</th>
+                <th>Proto</th>
+                <th>Duration</th>
+                <th>Packets</th>
+                <th>Throughput</th>
+                <th>Prediction</th>
+                <th>Confidence</th>
+                <th style="text-align:right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="flow-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/js/config.js"></script>
+<script src="assets/js/mock.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/ui.js"></script>
+<script src="assets/js/dashboard.js"></script>
+</body>
+</html>
