@@ -50,22 +50,7 @@
         { label: "Threat Feed", href: "index.html#feed", key: "feed", icon: "alert" },
         { label: "Traffic Map", href: "index.html#map", key: "map", icon: "globe" }
       ]
-    },
-    {
-      label: "Infrastructure", key: "infra", icon: "router", items: [
-        { label: "Routers", href: "index.html#routers", key: "routers", icon: "router" },
-        { label: "Subnets", href: "index.html#subnets", key: "subnets", icon: "globe" },
-        { label: "Port Watch", href: "index.html#ports", key: "ports", icon: "lock" }
-      ]
-    },
-    {
-      label: "Model", key: "model", icon: "cpu", items: [
-        { label: "Inference Log", href: "index.html#inference", key: "inference", icon: "activity" },
-        { label: "Class Accuracy", href: "index.html#accuracy", key: "accuracy", icon: "chart" },
-        { label: "Retraining", href: "index.html#retrain", key: "retrain", icon: "refresh" }
-      ]
-    },
-    { label: "Reports", key: "reports", icon: "chart", items: [] }
+    }
   ];
 
   const FOOT_NAV = [
