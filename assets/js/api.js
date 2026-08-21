@@ -134,6 +134,13 @@
     getPortActivity: () => get("/api/analytics/ports"),
     getNodes: () => get("/api/nodes"),
 
+    // `window` is in minutes. The server caps it, so a caller cannot ask for a
+    // range that would table-scan the whole flow history.
+    getTalkers({ window = 15, limit = 25 } = {}) {
+      return get(`/api/analytics/talkers?window=${window}&limit=${limit}`);
+    },
+    getTrafficBreakdown: (window = 15) => get(`/api/analytics/traffic?window=${window}`),
+
     // ── incidents ───────────────────────────────────────────────────────
     getIncidents: (status = "all", limit = 100) =>
       get(`/api/incidents?status=${status}&limit=${limit}`),

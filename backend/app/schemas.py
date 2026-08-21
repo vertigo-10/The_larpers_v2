@@ -241,6 +241,63 @@ class BreakdownOut(BaseModel):
     values: List[float]
 
 
+class TalkerOut(BaseModel):
+    """One source address, summarised over the requested window.
+
+    Carries bytes, packets and flow count together rather than a single "volume"
+    number, because the three rank differently and the difference is diagnostic.
+    A bulk download tops the byte ranking; a SYN flood is nearly invisible there
+    and tops the flow count instead, since its whole method is a great many tiny
+    conversations. Ranking by bytes alone would hide the attack this tool exists
+    to find.
+    """
+
+    src_ip: str
+    flows: int
+    packets: int
+    total_bytes: float
+    bytes_share: float          # percent of all traffic in the window
+    attack_flows: int
+    attack_share: float         # percent of this talker's own flows
+    top_prediction: str
+    max_confidence: float
+    mitigated: int
+    ports: int                  # distinct destination ports touched
+    nodes: List[str]
+    first_seen: int             # epoch seconds
+    last_seen: int
+
+
+class TalkersOut(BaseModel):
+    window_minutes: int
+    total_bytes: float
+    total_flows: int
+    unique_sources: int
+    talkers: List[TalkerOut]
+
+
+class ProtocolRowOut(BaseModel):
+    protocol: str
+    flows: int
+    total_bytes: float
+    attack_flows: int
+
+
+class PortRowOut(BaseModel):
+    port: int
+    service: str
+    flows: int
+    total_bytes: float
+    attack_flows: int
+    sources: int
+
+
+class TrafficBreakdownOut(BaseModel):
+    window_minutes: int
+    protocols: List[ProtocolRowOut]
+    ports: List[PortRowOut]
+
+
 class SummaryOut(BaseModel):
     flows_per_min: int
     attacks_blocked: int

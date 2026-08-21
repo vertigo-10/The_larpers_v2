@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Traffic Analysis — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Traffic Analysis</h1>
+      <span class="crumb" id="crumb">/ who is talking</span>
+      <div class="topbar-right">
+        <select class="sel-input" id="in-window" style="height:30px">
+          <option value="5">Last 5 minutes</option>
+          <option value="15" selected>Last 15 minutes</option>
+          <option value="60">Last hour</option>
+          <option value="360">Last 6 hours</option>
+          <option value="1440">Last 24 hours</option>
+        </select>
+        <button class="pill" id="btn-refresh"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="notice">
+        <span id="ico-notice"></span>
+        <span>
+          Sources are ranked by whether they are attacking first, then by volume.
+          A flood is ranked in by <b>flow count</b> as well as bytes — a SYN flood
+          moves almost no data, so a byte-only ranking would leave it off this
+          page entirely. <b>LOGGED</b> means the decision was recorded here;
+          SENTRY does not block traffic at the network edge.
+        </span>
+      </div>
+
+      <div class="stat-strip" id="stat-strip"></div>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-head">
+          <span class="panel-title">Top talkers</span>
+          <div class="right">
+            <span class="pill" style="height:24px;font-size:10.5px" id="sort-pill">by threat</span>
+            <button class="btn btn-sm" data-sort="threat">Threat</button>
+            <button class="btn btn-sm" data-sort="bytes">Volume</button>
+            <button class="btn btn-sm" data-sort="flows">Flows</button>
+            <button class="btn btn-sm" data-sort="ports">Ports</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Source IP</th>
+                <th>Verdict</th>
+                <th>Flows</th>
+                <th>Attack flows</th>
+                <th>Packets</th>
+                <th>Volume</th>
+                <th>Share</th>
+                <th>Ports</th>
+                <th>Seen on</th>
+                <th>Last seen</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="talker-body"></tbody>
+          </table>
+        </div>
+        <div class="section-note" id="talker-note" style="padding:10px 14px"></div>
+      </section>
+
+      <div class="split" style="margin-top:14px">
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Protocols</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Protocol</th>
+                  <th>Flows</th>
+                  <th>Volume</th>
+                  <th>Attack flows</th>
+                </tr>
+              </thead>
+              <tbody id="proto-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Destination ports</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">top 15</span></div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Port</th>
+                  <th>Service</th>
+                  <th>Flows</th>
+                  <th>Sources</th>
+                  <th>Attack flows</th>
+                </tr>
+              </thead>
+              <tbody id="port-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/config.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/ui.js"></script>
+<script src="assets/js/traffic.js"></script>
+</body>
+</html>

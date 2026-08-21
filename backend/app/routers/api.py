@@ -5,11 +5,12 @@ data yet) the endpoint says so rather than inventing something plausible.
 """
 
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -33,12 +34,17 @@ from ..schemas import (
     IncidentActionIn,
     IncidentOut,
     MitigateIn,
+    PortRowOut,
+    ProtocolRowOut,
     SeriesOut,
     SettingsIn,
     SettingsOut,
     StatusOut,
     SummaryOut,
+    TalkerOut,
+    TalkersOut,
     ThresholdIn,
+    TrafficBreakdownOut,
 )
 from ..security import (
     IngestCaller,
@@ -318,6 +324,191 @@ def analytics_ports(db: Session = Depends(get_db), user: User = Depends(current_
         .group_by(Flow.dst_port).order_by(func.count(Flow.id).desc()).limit(8)
     ).all()
     return BreakdownOut(labels=[str(r[0]) for r in rows], values=[float(r[1]) for r in rows])
+
+
+# Only the ports worth naming. A wrong guess is worse than a blank: an analyst
+# who reads "HTTPS" next to port 443 on a flood stops looking, and the label is
+# a guess about a port number, not an observation of the protocol.
+WELL_KNOWN_PORTS = {
+    20: "FTP-data", 21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+    53: "DNS", 67: "DHCP", 68: "DHCP", 69: "TFTP", 80: "HTTP",
+    110: "POP3", 123: "NTP", 137: "NetBIOS", 143: "IMAP", 161: "SNMP",
+    389: "LDAP", 443: "HTTPS", 445: "SMB", 465: "SMTPS", 514: "Syslog",
+    587: "SMTP", 993: "IMAPS", 995: "POP3S", 1433: "MSSQL", 1521: "Oracle",
+    1900: "SSDP", 3306: "MySQL", 3389: "RDP", 5060: "SIP", 5432: "Postgres",
+    5900: "VNC", 6379: "Redis", 8080: "HTTP-alt", 8443: "HTTPS-alt",
+    9200: "Elasticsearch", 11211: "Memcached", 27017: "MongoDB",
+}
+
+
+def _window_start(minutes: int) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+
+def _epoch(dt: Optional[datetime]) -> int:
+    if dt is None:
+        return 0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+_ATTACK_FLOW = case((Flow.prediction != BENIGN, 1), else_=0)
+_MITIGATED_FLOW = case((Flow.mitigated.is_(True), 1), else_=0)
+
+
+@router.get("/analytics/talkers", response_model=TalkersOut)
+def analytics_talkers(
+    window: int = Query(default=15, ge=1, le=1440),
+    limit: int = Query(default=25, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Who is sending the most, and is any of it an attack.
+
+    Deliberately two-stage. A spoofed-source flood can produce hundreds of
+    thousands of distinct addresses in a few minutes, so the candidate set is
+    narrowed in SQL before any per-source detail is read — otherwise the one
+    scenario this page exists for is the scenario that exhausts memory.
+
+    Candidates come from two rankings, by bytes and by flow count, because a
+    flood that tops the second is invisible in the first.
+    """
+    since = _window_start(window)
+    scope = (Flow.org_id == user.org_id, Flow.ts >= since)
+
+    totals = db.execute(
+        select(
+            func.coalesce(func.sum(Flow.total_bytes), 0.0),
+            func.count(Flow.id),
+            func.count(func.distinct(Flow.src_ip)),
+        ).where(*scope)
+    ).one()
+    total_bytes, total_flows, unique_sources = float(totals[0]), int(totals[1]), int(totals[2])
+
+    def _rank(column):
+        return db.execute(
+            select(Flow.src_ip).where(*scope)
+            .group_by(Flow.src_ip).order_by(column.desc()).limit(limit)
+        ).scalars().all()
+
+    candidates = set(_rank(func.sum(Flow.total_bytes))) | set(_rank(func.count(Flow.id)))
+    if not candidates:
+        return TalkersOut(
+            window_minutes=window, total_bytes=total_bytes, total_flows=total_flows,
+            unique_sources=unique_sources, talkers=[],
+        )
+
+    narrowed = scope + (Flow.src_ip.in_(candidates),)
+
+    rows = db.execute(
+        select(
+            Flow.src_ip,
+            func.count(Flow.id),
+            func.coalesce(func.sum(Flow.packets), 0),
+            func.coalesce(func.sum(Flow.total_bytes), 0.0),
+            func.coalesce(func.sum(_ATTACK_FLOW), 0),
+            func.coalesce(func.sum(_MITIGATED_FLOW), 0),
+            func.count(func.distinct(Flow.dst_port)),
+            func.max(Flow.ts),
+            func.min(Flow.ts),
+        ).where(*narrowed).group_by(Flow.src_ip)
+    ).all()
+
+    # The label that best characterises each source, and how sure the model was.
+    # An attack label wins over benign even when most of the source's flows are
+    # benign — a host that is 95% normal and 5% flood is a host that is
+    # flooding, and burying that under its own background traffic would be a
+    # detection failure.
+    verdicts: Dict[str, Dict[str, int]] = defaultdict(dict)
+    confidence: Dict[str, float] = defaultdict(float)
+    for ip, label, count, best in db.execute(
+        select(Flow.src_ip, Flow.prediction, func.count(Flow.id), func.max(Flow.confidence))
+        .where(*narrowed).group_by(Flow.src_ip, Flow.prediction)
+    ).all():
+        verdicts[ip][label] = int(count)
+        if label != BENIGN:
+            confidence[ip] = max(confidence[ip], float(best or 0.0))
+
+    nodes_by_ip: Dict[str, List[str]] = defaultdict(list)
+    for ip, node in db.execute(
+        select(Flow.src_ip, Flow.node).where(*narrowed).distinct()
+    ).all():
+        nodes_by_ip[ip].append(node)
+
+    talkers = []
+    for ip, flows, packets, sent, attacks, mitigated, ports, last, first in rows:
+        labels = verdicts.get(ip, {})
+        attack_labels = {k: v for k, v in labels.items() if k != BENIGN}
+        top = max(attack_labels or labels or {BENIGN: 0}, key=lambda k: (attack_labels or labels)[k])
+        talkers.append(TalkerOut(
+            src_ip=ip,
+            flows=int(flows),
+            packets=int(packets),
+            total_bytes=float(sent),
+            bytes_share=round(float(sent) / total_bytes * 100, 2) if total_bytes else 0.0,
+            attack_flows=int(attacks),
+            attack_share=round(int(attacks) / int(flows) * 100, 1) if flows else 0.0,
+            top_prediction=top,
+            max_confidence=round(confidence.get(ip, 0.0), 4),
+            mitigated=int(mitigated),
+            ports=int(ports),
+            nodes=sorted(nodes_by_ip.get(ip, [])),
+            first_seen=_epoch(first),
+            last_seen=_epoch(last),
+        ))
+
+    # Attackers first, then by volume. Sorting purely by bytes would put a
+    # backup job above an active flood.
+    talkers.sort(key=lambda t: (t.attack_flows > 0, t.attack_flows, t.total_bytes), reverse=True)
+    return TalkersOut(
+        window_minutes=window, total_bytes=total_bytes, total_flows=total_flows,
+        unique_sources=unique_sources, talkers=talkers[:limit],
+    )
+
+
+@router.get("/analytics/traffic", response_model=TrafficBreakdownOut)
+def analytics_traffic(
+    window: int = Query(default=15, ge=1, le=1440),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """What the traffic is made of — by protocol and by destination port."""
+    since = _window_start(window)
+    scope = (Flow.org_id == user.org_id, Flow.ts >= since)
+
+    protocols = [
+        ProtocolRowOut(
+            protocol=proto, flows=int(flows),
+            total_bytes=float(sent), attack_flows=int(attacks),
+        )
+        for proto, flows, sent, attacks in db.execute(
+            select(
+                Flow.protocol, func.count(Flow.id),
+                func.coalesce(func.sum(Flow.total_bytes), 0.0),
+                func.coalesce(func.sum(_ATTACK_FLOW), 0),
+            ).where(*scope).group_by(Flow.protocol).order_by(func.count(Flow.id).desc())
+        ).all()
+    ]
+
+    ports = [
+        PortRowOut(
+            port=int(port), service=WELL_KNOWN_PORTS.get(int(port), ""),
+            flows=int(flows), total_bytes=float(sent),
+            attack_flows=int(attacks), sources=int(sources),
+        )
+        for port, flows, sent, attacks, sources in db.execute(
+            select(
+                Flow.dst_port, func.count(Flow.id),
+                func.coalesce(func.sum(Flow.total_bytes), 0.0),
+                func.coalesce(func.sum(_ATTACK_FLOW), 0),
+                func.count(func.distinct(Flow.src_ip)),
+            ).where(*scope).group_by(Flow.dst_port)
+            .order_by(func.count(Flow.id).desc()).limit(15)
+        ).all()
+    ]
+
+    return TrafficBreakdownOut(window_minutes=window, protocols=protocols, ports=ports)
 
 
 @router.get("/nodes")

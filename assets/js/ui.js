@@ -70,6 +70,7 @@
       label: "Monitoring", key: "monitoring", icon: "radar", open: true, items: [
         { label: "Live Overview", href: "index.html", key: "dashboard", icon: "activity" },
         { label: "Alerts & Incidents", href: "alerts.html", key: "alerts", icon: "alert" },
+        { label: "Traffic Analysis", href: "traffic.html", key: "traffic", icon: "globe" },
         { label: "Network Nodes", href: "nodes.html", key: "nodes", icon: "router" }
       ]
     },
@@ -264,6 +265,15 @@
       if (n >= 1e6) return (n / 1e6).toFixed(2) + " MB/s";
       if (n >= 1e3) return (n / 1e3).toFixed(1) + " KB/s";
       return Math.round(n) + " B/s";
+    },
+    /** An absolute volume, as opposed to `bytes`, which is a rate. */
+    size(n) {
+      n = Number(n) || 0;
+      if (n >= 1e12) return (n / 1e12).toFixed(2) + " TB";
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
+      if (n >= 1e6) return (n / 1e6).toFixed(2) + " MB";
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + " KB";
+      return Math.round(n) + " B";
     },
     time(ts) {
       return new Date(ts).toLocaleTimeString("en-GB", { hour12: false });
