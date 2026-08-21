@@ -234,3 +234,34 @@ def test_ingested_flows_land_in_the_keys_own_org(client, alpha, beta):
 
     in_alpha = client.get("/api/flows?limit=200", cookies=alpha).json()
     assert all(f["src_ip"] != marker for f in in_alpha)
+
+
+def test_a_real_collector_flow_survives_the_whole_pipeline(client, alpha):
+    """Packet → flow table → ingest → model → dashboard, end to end.
+
+    Every other test checks one link. This one checks that the collector and the
+    server, which are separate programs that never import each other, actually
+    agree — a flow built by the real aggregation code is posted with a real key
+    and comes back out scored.
+    """
+    from .test_collector import LOCAL, collector, ipv4
+
+    table = collector.FlowTable(LOCAL)
+    for _ in range(900):
+        table.observe(ipv4("198.51.100.42", "10.0.0.5", size=1400, dport=80))
+    (flow,) = table.expire(force=True)
+    flow["node"] = "COLLECTOR-01"
+
+    created = _mint(client, alpha, "e2e-collector")
+    r = client.post("/api/ingest", headers=_auth(created["key"]),
+                    json={"flows": [flow]})
+    assert r.status_code == 200, r.text
+
+    listed = client.get("/api/flows?limit=200", cookies=alpha).json()
+    scored = next(f for f in listed if f["src_ip"] == "198.51.100.42")
+    assert scored["node"] == "COLLECTOR-01"
+    assert scored["packets"] == 900
+    # The model has to have said something about it — an unscored flow reaching
+    # the dashboard would be a silent hole in the detection path.
+    assert scored["prediction"]
+    assert 0.0 <= scored["confidence"] <= 1.0

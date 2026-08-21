@@ -138,14 +138,59 @@ Health checks should point at `/api/health`.
 
 ## Feeding it real traffic
 
-`POST /api/ingest` is the production path. Batch up to 500 flows; they are
-scored, persisted, promoted to incidents past the confidence threshold, and
-pushed to connected dashboards over the WebSocket.
+Until something posts to `/api/ingest`, the dashboard shows simulated flows and
+nothing else. There are two ways to feed it.
+
+### The collector agent
+
+`agent/sentry_collector.py` captures live packets on a machine you want watched,
+aggregates them into flows, and posts them. This is the piece that turns SENTRY
+from a demo into a monitor.
+
+```bash
+# on the machine you want watched
+pip install -r agent/requirements.txt
+
+export SENTRY_API_KEY=sentry_ak_...        # Settings → Collector keys
+sudo -E python -m agent.sentry_collector --server https://sentry.example.com
+```
+
+`sudo` is needed because packet capture requires root. The `-E` is not optional:
+plain `sudo` drops your environment, taking `SENTRY_API_KEY` with it. If you
+would rather not export a secret at all, put it in a file and pass `--key-file`
+— the collector refuses to read one that is group- or world-readable.
+
+Useful flags:
+
+| Flag | Default | Why you would change it |
+|---|---|---|
+| `--interface` / `-i` | scapy's default route | Capture on a mirror/SPAN port instead of the uplink |
+| `--node` | short hostname | The name this sensor gets in the dashboard |
+| `--filter` | `ip or ip6` | Any BPF expression, e.g. `not port 22` to drop your own SSH |
+| `--flush-interval` | `5.0` | Seconds between posts |
+| `--key-file` | — | Read the key from a mode-600 file rather than the environment |
+| `--insecure` | off | Skip TLS verification. Self-signed lab servers only |
+
+Two limits worth knowing before you deploy it:
+
+- **It reads headers, never payloads.** Addresses, ports, sizes and timings go in;
+  only counters derived from them come out. A tool that watches a network should
+  not become a way to read everyone's traffic, and the narrow scope means a
+  compromised collector leaks metadata rather than content.
+- **It buffers, but not forever.** If the server is unreachable it retries with
+  backoff and holds up to 20,000 flows. Past that the oldest are dropped and the
+  loss is printed — during an attack the newest flows are the ones you need.
+
+To watch a whole network rather than one host, run it on a machine attached to a
+switch mirror port. Flows where neither endpoint is local are kept and oriented
+by convention, which is exactly the mirrored case.
+
+### Posting flows yourself
 
 ```bash
 curl -X POST http://localhost:8000/api/ingest \
   -H 'Content-Type: application/json' \
-  -b 'sentry_session=<cookie>' \
+  -H 'Authorization: Bearer sentry_ak_...' \
   -d '{"flows":[{
         "src_ip":"172.16.0.5","dst_port":443,"protocol":"TCP",
         "node":"EDGE-01","duration":0.043,"packets":1284,
@@ -153,8 +198,14 @@ curl -X POST http://localhost:8000/api/ingest \
       }]}'
 ```
 
-`total_bytes` or `bytes_per_sec` — one of the two; the other is derived. Requires
-the `admin` or `analyst` role.
+Batch up to 500 flows; they are scored, persisted, promoted to incidents past the
+confidence threshold, and pushed to connected dashboards over the WebSocket.
+`total_bytes` or `bytes_per_sec` — one of the two; the other is derived.
+
+Authenticate with a collector key as above, or with a session cookie if you are
+testing from a logged-in browser (`admin` or `analyst`). Keys are the right
+choice for anything long-lived: they carry no person's access, they are scoped to
+ingest alone, and revoking one does not disturb anybody's session.
 
 ## Architecture
 
@@ -166,21 +217,28 @@ backend/
     main.py             app factory, security headers, WebSocket, static mounts
     config.py           env-driven settings, startup safety checks
     db.py               engine, session, additive migration shim
-    models.py           User, Org, Flow, Incident, AuditLog, Settings
+    models.py           User, Org, Flow, Incident, AuditLog, ApiKey, Settings
     schemas.py          pydantic request/response contracts
-    security.py         bcrypt, JWT sessions, role guards, revocation
+    security.py         bcrypt, JWT sessions, role guards, revocation, API keys
     engine.py           scoring loop, incident promotion, WebSocket fan-out
     ml/
       train.py          trains from sentryv1.py, writes artifacts
       infer.py          loads artifacts, batched inference
     routers/
       auth.py           signup, login, logout, profile, password
-      team.py           member management, audit log
+      team.py           member management, audit log, collector keys
       api.py            flows, incidents, analytics, settings, reports
+  tests/                82 tests, no network or root required
+agent/
+  sentry_collector.py   packet capture → flow aggregation → POST /api/ingest
+  requirements.txt      scapy + requests only, deliberately not the backend's
 assets/
   css/styles.css        theme tokens and all styling
   js/                   one module per page, no build step
 ```
+
+`agent/` is standalone on purpose. It runs on routers and laptops, which should
+not have to install torch and a database driver to send counters over HTTP.
 
 ### Pages
 

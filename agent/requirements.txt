@@ -1,0 +1,6 @@
+# Dependencies for the collector agent only. Deliberately separate from
+# backend/requirements.txt: the collector runs on machines you are monitoring —
+# a router, a laptop — and those should not be made to install torch, FastAPI
+# and a database driver just to send counters over HTTP.
+scapy==2.6.1
+requests==2.32.3
