@@ -111,6 +111,57 @@ class OrgSettings(Base):
     org: Mapped["Org"] = relationship(back_populates="settings")
 
 
+class ApiKey(Base):
+    """A non-human credential, used by collectors posting to /api/ingest.
+
+    An agent on a router or laptop cannot hold a person's password, and should
+    not: it would inherit that person's full access and survive their departure.
+    A key is scoped to one org, carries a fixed role, and can be revoked on its
+    own without disturbing anyone's session.
+    """
+
+    __tablename__ = "api_keys"
+    __table_args__ = (Index("ix_api_keys_org_active", "org_id", "revoked_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+
+    label: Mapped[str] = mapped_column(String(120), default="collector")
+
+    # The first few characters, stored in the clear so a key can be identified
+    # in a list and in the audit log without holding anything that grants access.
+    prefix: Mapped[str] = mapped_column(String(16), index=True)
+
+    # SHA-256 of the secret, not bcrypt. bcrypt's cost exists to slow down
+    # guessing of low-entropy human passwords; these are 32 random bytes, so
+    # brute force is not the threat and a per-request bcrypt verify would just
+    # add latency to every ingested batch. What matters is that a database leak
+    # does not hand over usable keys, which a plain digest already achieves.
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    # Deliberately not a full Role: a collector needs to submit flows and
+    # nothing else. If a key leaks it must not be able to read incidents, change
+    # settings, or manage the team.
+    scope: Mapped[str] = mapped_column(String(20), default="ingest")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Soft revocation: the row survives so the audit trail still resolves which
+    # key performed past actions.
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None
+
+
 class Node(Base):
     """A monitored network segment or device."""
 

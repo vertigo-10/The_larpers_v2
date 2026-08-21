@@ -44,6 +44,7 @@
     paintLocal();
     applyRole();
     await checkBackend();
+    await initKeys();
 
     SHARED.concat(["in-poll", "in-rows", "in-api"]).forEach((id) => {
       const node = el(id);
@@ -221,6 +222,107 @@
       badge.style.borderColor = "rgba(255,80,100,0.35)";
       el("backend-info").innerHTML =
         `<div class="section-note">${esc(err.message)}</div>`;
+    }
+  }
+
+  // ── collector keys ──────────────────────────────────────────────────────
+  // The endpoints are admin-only, so the whole panel stays hidden for everyone
+  // else rather than rendering and then 403-ing on click.
+  async function initKeys() {
+    if (state.user.role !== "admin") return;
+    el("keys-panel").hidden = false;
+    await paintKeys();
+
+    el("btn-new-key").addEventListener("click", async () => {
+      const label = prompt(
+        "Name this key — something identifying the machine it will run on:",
+        "collector"
+      );
+      if (label === null) return;
+
+      const btn = el("btn-new-key");
+      btn.disabled = true;
+      try {
+        const created = await api.createKey(label.trim() || "collector");
+        // Revealed once. There is no second chance to read it, so it is shown
+        // until the page is left rather than auto-hidden on a timer.
+        el("new-key-value").textContent = created.key;
+        el("new-key-reveal").hidden = false;
+        await paintKeys();
+        toast("Key created — copy it now.");
+      } catch (err) {
+        toast(err.message || "Could not create key.");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    el("btn-copy-key").addEventListener("click", async () => {
+      const value = el("new-key-value").textContent;
+      try {
+        await navigator.clipboard.writeText(value);
+        toast("Copied to clipboard.");
+      } catch {
+        // Clipboard access needs a secure context, so it fails on plain-HTTP
+        // hosts. Select the text instead so it can still be copied by hand.
+        const range = document.createRange();
+        range.selectNodeContents(el("new-key-value"));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        toast("Select and copy manually.");
+      }
+    });
+  }
+
+  async function paintKeys() {
+    const box = el("keys-list");
+    try {
+      const keys = await api.getKeys();
+      if (!keys.length) {
+        box.innerHTML = "No collector keys yet.";
+        return;
+      }
+      box.innerHTML = keys.map((k) => {
+        const used = k.last_used_at
+          ? `last used ${new Date(k.last_used_at).toLocaleString()}`
+          : "never used";
+        const state_ = k.is_active
+          ? `<span class="tag tag-benign">ACTIVE</span>`
+          : `<span class="tag tag-ddos">REVOKED</span>`;
+        return `
+          <div class="kv" style="align-items:center">
+            <span class="k">
+              ${state_}
+              <b style="margin-left:8px">${esc(k.label)}</b>
+              <code style="margin-left:8px;font-size:11px">${esc(k.prefix)}…</code>
+            </span>
+            <span class="v">
+              <span style="font-size:11px;color:var(--text-dim)">${esc(used)}</span>
+              ${k.is_active
+                ? `<button class="btn btn-sm" data-revoke="${k.id}" style="margin-left:10px">Revoke</button>`
+                : ""}
+            </span>
+          </div>`;
+      }).join("");
+
+      box.querySelectorAll("[data-revoke]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-revoke");
+          if (!confirm("Revoke this key? Any collector using it stops immediately.")) return;
+          btn.disabled = true;
+          try {
+            await api.revokeKey(id);
+            await paintKeys();
+            toast("Key revoked.");
+          } catch (err) {
+            toast(err.message || "Could not revoke key.");
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      box.innerHTML = `<span style="color:var(--red)">${esc(err.message)}</span>`;
     }
   }
 

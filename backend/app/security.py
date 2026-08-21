@@ -9,17 +9,21 @@ Design notes:
     filtered by it so one tenant can never read another's flows.
 """
 
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 import jwt
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, status
 from passlib.context import CryptContext
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
-from .models import Role, User
+from .models import ApiKey, Role, User, utcnow
 
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
@@ -138,6 +142,116 @@ def optional_current_user(
         return current_user(db=db, sentry_session=sentry_session)
     except HTTPException:
         return None
+
+
+# ── API keys ──────────────────────────────────────────────────────────────
+# Recognisable in logs and leak scanners. GitHub's secret scanning and similar
+# tools key off fixed prefixes, so a distinctive one means a key pasted into a
+# public repo has a chance of being caught automatically.
+API_KEY_PREFIX = "sentry_ak_"
+
+
+def generate_api_key() -> Tuple[str, str, str]:
+    """Mint a key. Returns (full_secret, prefix, hash).
+
+    The full secret is returned to the caller exactly once and never stored, so
+    it cannot be recovered from the database or shown again later — losing it
+    means issuing a new one.
+    """
+    raw = secrets.token_urlsafe(32)
+    full = f"{API_KEY_PREFIX}{raw}"
+    return full, full[: len(API_KEY_PREFIX) + 6], hash_api_key(full)
+
+
+def hash_api_key(full: str) -> str:
+    return hashlib.sha256(full.encode()).hexdigest()
+
+
+def resolve_api_key(db: Session, presented: str) -> Optional[ApiKey]:
+    """Look up an active key by its presented secret, or None.
+
+    The lookup is by digest, so the database is queried with a value that is
+    useless to anyone who intercepts it. The final comparison is
+    constant-time — an index lookup can leak through timing, and while that is
+    a thin channel it costs nothing to close.
+    """
+    if not presented or not presented.startswith(API_KEY_PREFIX):
+        return None
+    digest = hash_api_key(presented)
+    row = db.execute(select(ApiKey).where(ApiKey.key_hash == digest)).scalar_one_or_none()
+    if row is None or row.revoked_at is not None:
+        return None
+    if not hmac.compare_digest(row.key_hash, digest):
+        return None
+    return row
+
+
+def api_key_caller(
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+) -> ApiKey:
+    """Authenticate a collector via `Authorization: Bearer sentry_ak_…`."""
+    # partition rather than split, so a header of exactly "Bearer " yields an
+    # empty token and a clean 401 instead of an IndexError and a 500. An
+    # unauthenticated caller must never be able to raise a server error.
+    scheme, _, presented = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not presented.strip():
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    key = resolve_api_key(db, presented.strip())
+    if key is None:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Invalid or revoked API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Written on a separate transaction boundary from whatever the request goes
+    # on to do, so a failed ingest still records that the key was used — this is
+    # how you notice a leaked key being exercised.
+    key.last_used_at = utcnow()
+    db.commit()
+    return key
+
+
+class IngestCaller:
+    """Whoever is submitting flows — a person testing, or a collector agent.
+
+    Ingest is the one endpoint with two legitimate kinds of caller, so it
+    resolves both to a common shape rather than duplicating the handler. Keeps
+    org_id in one place, which is what the tenant scoping depends on.
+    """
+
+    def __init__(self, org_id: int, label: str, user_id: Optional[int] = None):
+        self.org_id = org_id
+        self.label = label
+        self.user_id = user_id
+
+
+def ingest_caller(
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+    sentry_session: Optional[str] = Cookie(default=None, alias=settings.cookie_name),
+) -> IngestCaller:
+    """Accept an API key, or fall back to an operator session.
+
+    A Bearer header wins when present: if someone sends a key, failing the
+    request is better than silently succeeding as whatever session the browser
+    happened to have, which would attribute an agent's flows to a person.
+    """
+    if authorization and authorization.lower().startswith("bearer "):
+        key = api_key_caller(db=db, authorization=authorization)
+        return IngestCaller(org_id=key.org_id, label=f"key:{key.label}")
+
+    user = current_user(db=db, sentry_session=sentry_session)
+    if user.role not in {Role.admin.value, Role.analyst.value}:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Requires one of: admin, analyst"
+        )
+    return IngestCaller(org_id=user.org_id, label=user.name, user_id=user.id)
 
 
 def require_role(*allowed: Role):

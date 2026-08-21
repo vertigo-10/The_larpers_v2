@@ -7,9 +7,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import AuditLog, Role, User
-from ..schemas import AuditOut, InviteIn, UpdateUserIn, UserOut
-from ..security import current_user, hash_password, password_problem, require_admin
+from ..models import ApiKey, AuditLog, Role, User, utcnow
+from ..schemas import (
+    ApiKeyCreatedOut,
+    ApiKeyCreateIn,
+    ApiKeyOut,
+    AuditOut,
+    InviteIn,
+    UpdateUserIn,
+    UserOut,
+)
+from ..security import (
+    current_user,
+    generate_api_key,
+    hash_password,
+    password_problem,
+    require_admin,
+)
 
 router = APIRouter(prefix="/api/team", tags=["team"])
 
@@ -137,6 +151,71 @@ def remove_member(
     db.add(AuditLog(org_id=admin.org_id, user_id=admin.id, user_label=admin.name,
                     action="team.member_removed", detail=f"Removed {email}"))
     db.commit()
+    return {"ok": True}
+
+
+# ── API keys ──────────────────────────────────────────────────────────────
+# Admin-only. A key is a credential that bypasses login entirely, so handing out
+# the ability to mint one is equivalent to handing out access.
+def _key_out(k: ApiKey) -> ApiKeyOut:
+    return ApiKeyOut(
+        id=k.id, label=k.label, prefix=k.prefix, scope=k.scope,
+        created_at=k.created_at, last_used_at=k.last_used_at,
+        revoked_at=k.revoked_at, is_active=k.is_active,
+    )
+
+
+@router.get("/keys", response_model=List[ApiKeyOut])
+def list_keys(db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    rows = db.execute(
+        select(ApiKey).where(ApiKey.org_id == admin.org_id)
+        .order_by(ApiKey.created_at.desc())
+    ).scalars().all()
+    return [_key_out(k) for k in rows]
+
+
+@router.post("/keys", response_model=ApiKeyCreatedOut, status_code=status.HTTP_201_CREATED)
+def create_key(
+    body: ApiKeyCreateIn,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Mint a collector key. The secret is shown here and never again."""
+    full, prefix, digest = generate_api_key()
+    key = ApiKey(
+        org_id=admin.org_id, label=body.label.strip() or "collector",
+        prefix=prefix, key_hash=digest, created_by_id=admin.id,
+    )
+    db.add(key)
+    # The label, never the secret. An audit log is exactly the kind of place a
+    # credential gets read from later.
+    db.add(AuditLog(org_id=admin.org_id, user_id=admin.id, user_label=admin.name,
+                    action="key.created", detail=f"Created API key '{key.label}' ({prefix}…)"))
+    db.commit()
+    db.refresh(key)
+
+    out = _key_out(key)
+    return ApiKeyCreatedOut(**out.model_dump(), key=full)
+
+
+@router.delete("/keys/{key_id}")
+def revoke_key(
+    key_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Revoke immediately. The row is kept so past audit entries still resolve."""
+    key = db.get(ApiKey, key_id)
+    # Checked against the caller's org before anything else — without this, a
+    # sequential id would let one tenant revoke another's collector.
+    if not key or key.org_id != admin.org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
+    if key.revoked_at is None:
+        key.revoked_at = utcnow()
+        db.add(AuditLog(org_id=admin.org_id, user_id=admin.id, user_label=admin.name,
+                        action="key.revoked",
+                        detail=f"Revoked API key '{key.label}' ({key.prefix}…)"))
+        db.commit()
     return {"ok": True}
 
 

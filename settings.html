@@ -134,6 +134,38 @@
           </div>
         </section>
 
+        <section class="panel" style="margin-bottom:14px" id="keys-panel" hidden>
+          <div class="panel-head">
+            <span class="panel-title">Collector keys</span>
+            <div class="right">
+              <button class="btn btn-sm" id="btn-new-key">New key</button>
+            </div>
+          </div>
+
+          <div class="setting-row" style="display:block">
+            <div class="setting-info" style="margin-bottom:10px">
+              <div class="d">
+                A collector agent runs on a machine you are monitoring and posts
+                flows to <code>/api/ingest</code>. It authenticates with one of
+                these keys instead of an account, so it never holds a person's
+                password and can be revoked on its own.
+              </div>
+            </div>
+
+            <div id="new-key-reveal" hidden style="margin-bottom:12px">
+              <div class="d" style="color:var(--amber);margin-bottom:6px">
+                Copy this now — it is stored hashed and cannot be shown again.
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <code id="new-key-value" style="flex:1;overflow-x:auto;padding:8px 10px;background:#0b0f11;border:1px solid var(--border);border-radius:6px;font-size:12px;white-space:nowrap"></code>
+                <button class="btn btn-sm" id="btn-copy-key">Copy</button>
+              </div>
+            </div>
+
+            <div id="keys-list" class="d">loading…</div>
+          </div>
+        </section>
+
         <section class="panel" style="margin-bottom:14px">
           <div class="panel-head">
             <span class="panel-title">Display</span>

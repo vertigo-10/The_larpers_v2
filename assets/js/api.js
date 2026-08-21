@@ -153,6 +153,13 @@
     removeMember: (id) => del(`/api/team/${id}`),
     getAudit: (limit = 100) => get(`/api/team/audit?limit=${limit}`),
 
+    // ── collector keys ──────────────────────────────────────────────────
+    // createKey is the only call that ever returns a usable secret, and only
+    // in its response — it is stored hashed, so there is no way to re-read it.
+    getKeys: () => get("/api/team/keys"),
+    createKey: (label) => post("/api/team/keys", { label }),
+    revokeKey: (id) => del(`/api/team/keys/${id}`),
+
     // ── reports ─────────────────────────────────────────────────────────
     getReport: (days = 7) => get(`/api/reports/summary?days=${days}`),
 

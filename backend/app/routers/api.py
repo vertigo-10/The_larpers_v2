@@ -40,7 +40,13 @@ from ..schemas import (
     SummaryOut,
     ThresholdIn,
 )
-from ..security import current_user, require_admin, require_operator
+from ..security import (
+    IngestCaller,
+    current_user,
+    ingest_caller,
+    require_admin,
+    require_operator,
+)
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -244,9 +250,13 @@ def list_flows(
 def ingest(
     body: FlowBatchIn,
     db: Session = Depends(get_db),
-    user: User = Depends(require_operator),
+    caller: IngestCaller = Depends(ingest_caller),
 ):
-    """Submit real captured flows for scoring. This is the production path."""
+    """Submit real captured flows for scoring. This is the production path.
+
+    Authenticates with either an API key (how a collector agent connects) or an
+    operator session (how a human tests it).
+    """
     detector = get_detector()
     if not detector.ready:
         raise HTTPException(
@@ -261,7 +271,7 @@ def ingest(
         raw.append(d)
 
     started = time.perf_counter()
-    scored = process_flows(db, user.org_id, raw, source="live")
+    scored = process_flows(db, caller.org_id, raw, source="live")
     elapsed_ms = (time.perf_counter() - started) * 1000.0
 
     return {

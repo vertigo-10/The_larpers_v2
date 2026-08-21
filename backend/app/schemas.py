@@ -168,6 +168,35 @@ class SettingsIn(BaseModel):
         return v
 
 
+# ── API keys ──────────────────────────────────────────────────────────────
+class ApiKeyCreateIn(BaseModel):
+    label: str = Field(default="collector", min_length=1, max_length=120)
+
+
+class ApiKeyOut(BaseModel):
+    """A key as listed. Deliberately carries no usable secret."""
+
+    id: int
+    label: str
+    prefix: str
+    scope: str
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    is_active: bool
+
+
+class ApiKeyCreatedOut(ApiKeyOut):
+    """Returned only from the create call.
+
+    `key` is the one and only time the secret exists outside the agent that
+    will use it — the database holds a digest, so it genuinely cannot be shown
+    again later.
+    """
+
+    key: str
+
+
 # ── misc ──────────────────────────────────────────────────────────────────
 class MitigateIn(BaseModel):
     flow_id: Optional[str] = None
