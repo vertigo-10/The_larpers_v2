@@ -1,38 +1,60 @@
+/**
+ * Static front-end configuration.
+ *
+ * Everything that describes the *system* (model name, accuracy, classes, org,
+ * operator) now comes from the API at runtime — it is deliberately not
+ * hard-coded here. A hard-coded number in this file was the origin of the old
+ * fabricated "99.2% on CIC-IDS2017" claim, which nothing had ever measured.
+ */
 window.SENTRY_CONFIG = {
+  // Empty string = same origin. The backend serves this dashboard by default,
+  // so no configuration is needed. Set it only if you host the UI separately.
   apiBaseUrl: "",
+
+  // Derived from apiBaseUrl below unless explicitly overridden.
   wsUrl: "",
-  useMockData: true,
-  pollIntervalMs: 2000,
-  flowIntervalMs: 1400,
+
+  pollIntervalMs: 4000,
   maxTableRows: 45,
-  historyPoints: 90,
-  org: "Northgate Systems",
-  operator: { name: "Jude Mekat", role: "Security Operations Lead", initials: "JM" },
-  model: { name: "sentry-ddos-v1", framework: "PyTorch", dataset: "CIC-IDS2017", accuracy: 99.2 },
-  classes: ["BENIGN", "DDoS", "DoS Hulk", "PortScan", "Bot", "FTP-Patator"],
-  nodes: [
-    { id: "edge-01", label: "EDGE-01", desc: "Core edge router" },
-    { id: "edge-02", label: "EDGE-02", desc: "Failover edge router" },
-    { id: "dc-lb-01", label: "DC-LB-01", desc: "Datacenter load balancer" },
-    { id: "vpn-gw", label: "VPN-GW", desc: "Remote access gateway" },
-    { id: "api-tier", label: "API-TIER", desc: "Public API subnet" },
-    { id: "db-tier", label: "DB-TIER", desc: "Database subnet" },
-    { id: "cdn-pop", label: "CDN-POP", desc: "CDN point of presence" },
-    { id: "iot-seg", label: "IOT-SEG", desc: "IoT segment" }
-  ]
+  historyPoints: 90
 };
 
 window.SENTRY_SETTINGS_KEY = "sentry.settings";
 
-// Settings page writes overrides here so the backend can be pointed at a real
-// service without editing this file.
+/**
+ * The three classes the deployed model actually predicts.
+ *
+ * Mirrors backend/app/ml/net.py CLASS_NAMES. The API reports the authoritative
+ * list via /api/status; this map only supplies presentation (colour + label).
+ */
+window.SENTRY_CLASSES = {
+  normal:   { label: "Normal",     short: "NORMAL", color: "#2fe08a", tag: "ok",   benign: true },
+  dos_ddos: { label: "DoS / DDoS", short: "DDOS",   color: "#ff5064", tag: "bad",  benign: false },
+  scan:     { label: "Port scan",  short: "SCAN",   color: "#ffb545", tag: "warn", benign: false }
+};
+
+window.SENTRY_BENIGN = "normal";
+
+window.SENTRY_SEVERITY = {
+  critical: { label: "Critical", color: "#ff5064" },
+  high:     { label: "High",     color: "#ff7a45" },
+  medium:   { label: "Medium",   color: "#ffb545" },
+  low:      { label: "Low",      color: "#6d7d85" }
+};
+
+// Local, per-browser preferences only. Anything the whole team shares
+// (threshold, auto-mitigate, webhook) lives server-side under /api/settings.
 (function () {
   try {
     const saved = JSON.parse(localStorage.getItem(window.SENTRY_SETTINGS_KEY) || "{}");
-    ["apiBaseUrl", "wsUrl", "useMockData", "pollIntervalMs", "flowIntervalMs", "maxTableRows", "org"]
-      .forEach(k => { if (saved[k] !== undefined) window.SENTRY_CONFIG[k] = saved[k]; });
-    if (saved.operator) Object.assign(window.SENTRY_CONFIG.operator, saved.operator);
+    ["apiBaseUrl", "wsUrl", "pollIntervalMs", "maxTableRows"]
+      .forEach((k) => { if (saved[k] !== undefined) window.SENTRY_CONFIG[k] = saved[k]; });
   } catch (err) {
-    console.warn("[sentry] could not read saved settings:", err.message);
+    console.warn("[sentry] could not read local preferences:", err.message);
+  }
+
+  if (!window.SENTRY_CONFIG.wsUrl) {
+    const base = window.SENTRY_CONFIG.apiBaseUrl || window.location.origin;
+    window.SENTRY_CONFIG.wsUrl = base.replace(/^http/, "ws").replace(/\/$/, "") + "/ws";
   }
 })();

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Model Performance — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Model Performance</h1>
+      <span class="crumb" id="crumb">/ detection network</span>
+      <div class="topbar-right">
+        <button class="pill" id="btn-refresh"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- The honesty notice is not optional chrome. A 100% score on synthetic
+           data reads as a real-world claim unless it is labelled every time. -->
+      <div class="notice" id="honesty" style="background:rgba(255,181,69,0.06);border-color:rgba(255,181,69,0.22)">
+        <span id="ico-warn"></span>
+        <span id="honesty-text">Loading model provenance…</span>
+      </div>
+
+      <div class="stat-strip" id="stat-strip" style="grid-template-columns:repeat(4,1fr)"></div>
+
+      <div class="page-grid" style="grid-template-columns:minmax(0,1fr) 360px">
+        <div>
+          <section class="panel" style="margin-bottom:14px">
+            <div class="panel-head">
+              <span class="panel-title">Per-class performance · held-out test split</span>
+              <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="split-pill">—</span></div>
+            </div>
+            <div class="table-scroll" style="max-height:none">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Class</th>
+                    <th>Precision</th>
+                    <th>Recall</th>
+                    <th>F1</th>
+                    <th>Support</th>
+                  </tr>
+                </thead>
+                <tbody id="perclass-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <span class="panel-title">Live agreement · simulated traffic only</span>
+              <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="live-pill">—</span></div>
+            </div>
+            <div style="padding:14px 15px" id="live-box"></div>
+          </section>
+        </div>
+
+        <div>
+          <section class="panel" style="margin-bottom:14px">
+            <div class="panel-head"><span class="panel-title">Architecture</span></div>
+            <div class="kv-list" id="arch-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><span class="panel-title">Input features</span></div>
+            <div class="kv-list" id="feature-list"></div>
+            <div class="section-note">
+              These six values are all the network sees. It has no payload,
+              no TLS metadata and no reputation feed — anything requiring those
+              is out of scope for this model.
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-head">
+          <span class="panel-title">Confusion matrix · test split</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px">rows = truth, columns = predicted</span></div>
+        </div>
+        <div style="padding:15px;overflow-x:auto" id="matrix-box"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/config.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/ui.js"></script>
+<script src="assets/js/model.js"></script>
+</body>
+</html>

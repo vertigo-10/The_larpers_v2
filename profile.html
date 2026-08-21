@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SENTRY NN — Operator Profile</title>
+<title>Profile — SENTRY NN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -15,12 +15,12 @@
 
   <div class="main">
     <header class="topbar">
-      <h1>Operator Profile</h1>
+      <h1>Profile</h1>
       <span class="crumb">/ account</span>
       <div class="topbar-right">
         <a href="settings.html" class="pill" id="btn-settings"></a>
         <button class="btn btn-primary" id="btn-signout">Sign out</button>
-        <span class="avatar" id="topbar-avatar">JM</span>
+        <span class="avatar" id="topbar-avatar">··</span>
       </div>
     </header>
 
@@ -29,52 +29,88 @@
         <div class="page-grid">
           <div style="display:flex;flex-direction:column;gap:14px">
             <section class="panel profile-card">
-              <div class="profile-avatar" id="pf-initials">JM</div>
-              <div class="profile-name" id="pf-name">Jude Mekat</div>
-              <div class="profile-role" id="pf-role">Security Operations Lead</div>
-              <div class="profile-badges">
-                <span class="pill" style="height:24px;font-size:10.5px">Admin</span>
-                <span class="pill live" style="height:24px;font-size:10.5px">On shift</span>
-              </div>
+              <div class="profile-avatar" id="pf-initials">··</div>
+              <div class="profile-name" id="pf-name">—</div>
+              <div class="profile-role" id="pf-title">—</div>
+              <div class="profile-badges" id="pf-badges"></div>
             </section>
 
             <section class="panel">
               <div class="panel-head"><span class="panel-title">Session</span></div>
-              <div class="kv-list">
-                <div class="kv"><span class="k">Organisation</span><span class="v" id="pf-org">—</span></div>
-                <div class="kv"><span class="k">Role</span><span class="v">Full access</span></div>
-                <div class="kv"><span class="k">Last sign-in</span><span class="v mono" id="pf-lastlogin">—</span></div>
-                <div class="kv"><span class="k">Data source</span><span class="v" id="pf-source">—</span></div>
-                <div class="kv"><span class="k">Model uptime</span><span class="v mono" id="pf-uptime">—</span></div>
-              </div>
+              <div class="kv-list" id="pf-session"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head"><span class="panel-title">What your role allows</span></div>
+              <div class="kv-list" id="pf-perms"></div>
             </section>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:14px">
-            <div class="stat-strip" style="grid-template-columns:repeat(4,1fr);margin-bottom:0" id="pf-stats"></div>
-
             <section class="panel">
               <div class="panel-head">
-                <span class="panel-title">Your review activity · last 14 days</span>
-                <div class="right"><span class="pill" style="height:24px;font-size:10.5px">alerts handled</span></div>
+                <span class="panel-title">Your details</span>
+                <div class="right"><span class="pill" style="height:24px;font-size:10.5px">visible to your team</span></div>
               </div>
-              <div class="mini-body" style="height:210px"><canvas id="activityChart"></canvas></div>
+              <div style="padding:15px;display:flex;flex-direction:column;gap:13px">
+                <div class="form-error" id="detail-err"></div>
+                <div class="field">
+                  <label for="in-name">Display name</label>
+                  <input type="text" id="in-name" class="txt-input wide" maxlength="120" />
+                </div>
+                <div class="field">
+                  <label for="in-title">Job title</label>
+                  <input type="text" id="in-title" class="txt-input wide" maxlength="120" />
+                </div>
+                <div class="field">
+                  <label for="in-email">Email</label>
+                  <input type="email" id="in-email" class="txt-input wide" disabled />
+                  <span class="hint">
+                    Changing the address you sign in with needs an admin — it is
+                    the account identity, not a display field.
+                  </span>
+                </div>
+                <div style="display:flex;justify-content:flex-end">
+                  <button class="btn btn-primary" id="btn-save-details">Save details</button>
+                </div>
+              </div>
             </section>
 
             <section class="panel">
               <div class="panel-head">
-                <span class="panel-title">Assigned network scope</span>
-                <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="pf-scope-count">—</span></div>
+                <span class="panel-title">Change password</span>
+                <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="ico-lock-pill">session stays active</span></div>
               </div>
-              <div class="kv-list" id="pf-scope"></div>
+              <div style="padding:15px;display:flex;flex-direction:column;gap:13px">
+                <div class="form-error" id="pw-err"></div>
+                <div class="field">
+                  <label for="in-current">Current password</label>
+                  <input type="password" id="in-current" class="txt-input wide" autocomplete="current-password" />
+                </div>
+                <div class="field">
+                  <label for="in-new">New password</label>
+                  <input type="password" id="in-new" class="txt-input wide" autocomplete="new-password" />
+                  <span class="hint" id="pw-hint">At least 12 characters. Length beats symbols.</span>
+                </div>
+                <div class="field">
+                  <label for="in-confirm">Confirm new password</label>
+                  <input type="password" id="in-confirm" class="txt-input wide" autocomplete="new-password" />
+                </div>
+                <div style="display:flex;justify-content:flex-end">
+                  <button class="btn btn-primary" id="btn-save-pw">Update password</button>
+                </div>
+              </div>
             </section>
 
-            <section class="panel">
-              <div class="panel-head"><span class="panel-title">Recent actions</span></div>
-              <div class="table-scroll" style="max-height:260px">
+            <section class="panel" id="activity-panel">
+              <div class="panel-head">
+                <span class="panel-title">Your recent actions</span>
+                <div class="right"><span class="pill" style="height:24px;font-size:10.5px">from the audit trail</span></div>
+              </div>
+              <div class="table-scroll" style="max-height:280px">
                 <table>
                   <thead>
-                    <tr><th>Time</th><th>Action</th><th>Target</th><th>Class</th><th style="text-align:right">Result</th></tr>
+                    <tr><th>When</th><th>Action</th><th>Detail</th></tr>
                   </thead>
                   <tbody id="pf-actions"></tbody>
                 </table>
@@ -87,9 +123,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="assets/js/config.js"></script>
-<script src="assets/js/mock.js"></script>
 <script src="assets/js/api.js"></script>
 <script src="assets/js/ui.js"></script>
 <script src="assets/js/profile.js"></script>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reports — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Reports</h1>
+      <span class="crumb" id="crumb">/ last 7 days</span>
+      <div class="topbar-right">
+        <div class="seg" id="range-seg">
+          <button data-days="1">24h</button>
+          <button data-days="7" class="on">7d</button>
+          <button data-days="30">30d</button>
+          <button data-days="90">90d</button>
+        </div>
+        <button class="pill" id="btn-csv"></button>
+        <button class="btn btn-primary" id="btn-print"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="notice">
+        <span id="ico-notice"></span>
+        <span id="report-header">Generating report…</span>
+      </div>
+
+      <div class="report-grid" id="totals"></div>
+
+      <div class="mini-grid" style="grid-template-columns:1fr 1fr">
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Flows by predicted class</span>
+          </div>
+          <div class="mini-body" style="height:220px"><canvas id="classChart"></canvas></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Incidents</span>
+          </div>
+          <div class="mini-body" style="height:220px"><canvas id="incChart"></canvas></div>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Top flagged sources</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px">by flagged flow count</span></div>
+        </div>
+        <div class="table-scroll" style="max-height:none">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Source IP</th>
+                <th>Flagged flows</th>
+                <th>Share of flagged</th>
+                <th style="text-align:right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="src-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/js/config.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/ui.js"></script>
+<script src="assets/js/reports.js"></script>
+</body>
+</html>

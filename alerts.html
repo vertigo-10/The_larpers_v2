@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Alerts &amp; Incidents — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Alerts &amp; Incidents</h1>
+      <span class="crumb" id="crumb">/ grouped by source</span>
+      <div class="topbar-right">
+        <button class="pill" id="btn-refresh"></button>
+        <button class="btn btn-primary" id="btn-export"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="notice">
+        <span id="ico-notice"></span>
+        <span>
+          An incident groups every flow from one source IP that the model
+          flagged inside a ten-minute window. Severity comes from the model's
+          confidence and the traffic volume — not from a fixed rule list.
+        </span>
+      </div>
+
+      <div class="stat-strip" id="stat-strip" style="grid-template-columns:repeat(4,1fr)"></div>
+
+      <section class="panel">
+        <div class="table-tabs" id="status-tabs">
+          <button class="on" data-status="all">All</button>
+          <button data-status="open">Open</button>
+          <button data-status="acknowledged">Acknowledged</button>
+          <button data-status="resolved">Resolved</button>
+        </div>
+        <div class="table-scroll" style="max-height:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Source IP</th>
+                <th>Class</th>
+                <th>Node</th>
+                <th>Flows</th>
+                <th>Peak conf.</th>
+                <th>Peak rate</th>
+                <th>Opened</th>
+                <th>Last seen</th>
+                <th>Status</th>
+                <th style="text-align:right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="inc-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/config.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/ui.js"></script>
+<script src="assets/js/alerts.js"></script>
+</body>
+</html>

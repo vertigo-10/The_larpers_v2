@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SENTRY NN — Settings</title>
+<title>Settings — SENTRY NN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -16,188 +16,186 @@
   <div class="main">
     <header class="topbar">
       <h1>Settings</h1>
-      <span class="crumb">/ workspace</span>
+      <span class="crumb" id="crumb">/ organisation</span>
       <div class="topbar-right">
-        <button class="pill" id="btn-reset"></button>
+        <span class="pill" id="role-pill">—</span>
         <button class="btn btn-primary" id="btn-save"></button>
-        <a href="profile.html" class="avatar" id="topbar-avatar">JM</a>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
       </div>
     </header>
 
     <div class="content">
       <div class="page">
-        <div class="notice">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M12 11v5M12 8h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
-          <div>
-            Point <b>Detection API base URL</b> at your PyTorch service and turn off <b>demo data</b> to go live.
-            The UI expects <code>GET /api/summary</code>, <code>GET /api/metrics/current</code> and <code>GET /api/flows</code>.
-            Full endpoint contract is in <code>README.md</code>.
-          </div>
+        <div class="notice" id="scope-notice">
+          <span id="ico-notice"></span>
+          <span id="scope-text">
+            Settings in <b>Detection</b> and <b>Alerting</b> are shared by everyone in
+            your organisation. <b>Display</b> settings are stored in this browser only.
+          </span>
         </div>
 
         <section class="panel" style="margin-bottom:14px">
           <div class="panel-head">
-            <span class="panel-title">Detection service connection</span>
-            <div class="right"><span class="pill" id="conn-badge">Not tested</span></div>
+            <span class="panel-title">Organisation</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">shared</span></div>
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Detection API base URL</div>
-              <div class="d">Root of the FastAPI/Flask service that wraps the trained network.</div>
+              <div class="t">Organisation name</div>
+              <div class="d">Shown across the dashboard and on exported reports.</div>
             </div>
             <div class="setting-control">
-              <input class="txt-input" id="in-api" placeholder="http://localhost:8000" style="min-width:260px" />
+              <input class="txt-input" id="in-org" maxlength="120" style="min-width:260px" />
             </div>
-          </div>
-
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="t">Live flow WebSocket</div>
-              <div class="d">Optional. Streams per-flow predictions instead of polling.</div>
-            </div>
-            <div class="setting-control">
-              <input class="txt-input" id="in-ws" placeholder="ws://localhost:8000/ws/live" style="min-width:260px" />
-            </div>
-          </div>
-
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="t">Use demo data</div>
-              <div class="d">Generates synthetic traffic locally so the dashboard runs without a backend.</div>
-            </div>
-            <div class="setting-control">
-              <label class="toggle"><input type="checkbox" id="in-mock" /><span class="track"></span><span class="knob"></span></label>
-            </div>
-          </div>
-
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="t">Connection test</div>
-              <div class="d" id="conn-detail">Sends a request to <code>/api/status</code> and reports what comes back.</div>
-            </div>
-            <div class="setting-control"><button class="btn btn-ghost" id="btn-test">Test connection</button></div>
           </div>
         </section>
 
         <section class="panel" style="margin-bottom:14px">
-          <div class="panel-head"><span class="panel-title">Detection behaviour</span></div>
+          <div class="panel-head">
+            <span class="panel-title">Detection</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">shared</span></div>
+          </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Classification threshold (τ)</div>
-              <div class="d">Minimum softmax confidence before a flow is treated as an attack.</div>
+              <div class="t">Detection threshold (τ)</div>
+              <div class="d">
+                Confidence a non-benign prediction must reach before it counts as
+                a detection. Lower catches more and cries wolf more.
+              </div>
             </div>
-            <div class="setting-control" style="display:flex;align-items:center;gap:12px;min-width:220px">
-              <input type="range" min="50" max="99" value="85" class="slider" id="in-threshold" style="width:150px" />
-              <span class="mono" id="threshold-out" style="width:38px">0.85</span>
+            <div class="setting-control" style="display:flex;align-items:center;gap:11px">
+              <input type="range" min="50" max="99" class="slider" id="in-threshold" style="width:150px" />
+              <span class="mono" id="threshold-label" style="width:38px">—</span>
             </div>
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Auto-mitigate high-confidence attacks</div>
-              <div class="d">Pushes a block rule automatically when confidence exceeds τ.</div>
+              <div class="t">Auto-mitigate</div>
+              <div class="d" id="auto-desc">
+                Automatically mark flows above τ as mitigated, without an operator
+                pressing anything.
+              </div>
             </div>
             <div class="setting-control">
-              <label class="toggle"><input type="checkbox" id="in-auto" checked /><span class="track"></span><span class="knob"></span></label>
+              <label class="toggle"><input type="checkbox" id="in-auto" /><span class="track"></span><span class="knob"></span></label>
             </div>
+          </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:14px">
+          <div class="panel-head">
+            <span class="panel-title">Alerting</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">shared</span></div>
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Refresh interval</div>
-              <div class="d">How often charts and counters poll the detection service.</div>
+              <div class="t">Minimum severity to alert on</div>
+              <div class="d">Incidents below this level are recorded but do not raise an alert.</div>
             </div>
             <div class="setting-control">
-              <select class="sel-input" id="in-poll">
-                <option value="1000">1 second</option>
-                <option value="2000">2 seconds</option>
-                <option value="5000">5 seconds</option>
-                <option value="10000">10 seconds</option>
+              <select class="sel-input" id="in-severity">
+                <option value="low">Low and above — everything</option>
+                <option value="medium">Medium and above</option>
+                <option value="high">High and above</option>
+                <option value="critical">Critical only</option>
               </select>
             </div>
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Rows kept in live table</div>
-              <div class="d">Higher values keep more history in view but use more memory.</div>
+              <div class="t">Webhook URL <span class="tag tag-pending">not delivering yet</span></div>
+              <div class="d">
+                Stored and validated, but nothing is posted to it yet. Outbound
+                delivery is deliberately unimplemented: fetching a user-supplied
+                URL from the server needs SSRF protection first, or a webhook
+                pointing at <code>169.254.169.254</code> would turn this box into
+                a way to read the host's cloud credentials. Use browser
+                notifications below until it lands.
+              </div>
             </div>
             <div class="setting-control">
-              <select class="sel-input" id="in-rows">
-                <option value="25">25 rows</option>
-                <option value="45">45 rows</option>
-                <option value="100">100 rows</option>
-                <option value="250">250 rows</option>
-              </select>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel" style="margin-bottom:14px">
-          <div class="panel-head"><span class="panel-title">Alerting</span></div>
-
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="t">Webhook URL</div>
-              <div class="d">Receives a JSON payload for every flow classified as an attack.</div>
-            </div>
-            <div class="setting-control">
-              <input class="txt-input" id="in-webhook" placeholder="https://hooks.slack.com/services/…" style="min-width:260px" />
+              <input class="txt-input" id="in-webhook" placeholder="https://hooks.example.com/…" style="min-width:260px" />
             </div>
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Browser notifications</div>
-              <div class="d">Raises a desktop notification on CRITICAL threat level.</div>
+              <div class="t">Desktop notifications</div>
+              <div class="d" id="notify-desc">Browser notifications for high-confidence detections.</div>
             </div>
             <div class="setting-control">
               <label class="toggle"><input type="checkbox" id="in-notify" /><span class="track"></span><span class="knob"></span></label>
             </div>
           </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:14px">
+          <div class="panel-head">
+            <span class="panel-title">Display</span>
+            <div class="right"><span class="pill" style="height:24px;font-size:10.5px">this browser only</span></div>
+          </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Minimum severity to alert</div>
-              <div class="d">Suppresses lower-severity classes such as isolated port scans.</div>
+              <div class="t">Refresh interval</div>
+              <div class="d">How often to poll when the live WebSocket is unavailable.</div>
             </div>
             <div class="setting-control">
-              <select class="sel-input" id="in-severity">
-                <option>All detections</option>
-                <option selected>Elevated and above</option>
-                <option>Critical only</option>
+              <select class="sel-input" id="in-poll">
+                <option value="2000">2 seconds</option>
+                <option value="4000">4 seconds</option>
+                <option value="8000">8 seconds</option>
+                <option value="15000">15 seconds</option>
               </select>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="t">Rows in the flow table</div>
+              <div class="d">Higher values keep more history on screen and use more memory.</div>
+            </div>
+            <div class="setting-control">
+              <select class="sel-input" id="in-rows">
+                <option value="25">25 rows</option>
+                <option value="45">45 rows</option>
+                <option value="80">80 rows</option>
+                <option value="150">150 rows</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="t">API base URL</div>
+              <div class="d">
+                Leave blank when the backend serves this dashboard, which is the
+                default. Set it only if you host the UI separately.
+              </div>
+            </div>
+            <div class="setting-control">
+              <input class="txt-input" id="in-api" placeholder="same origin" style="min-width:260px" />
             </div>
           </div>
         </section>
 
-        <section class="panel" style="margin-bottom:14px">
-          <div class="panel-head"><span class="panel-title">Workspace</span></div>
-
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="t">Organisation name</div>
-              <div class="d">Shown in the sidebar and on exported reports.</div>
-            </div>
-            <div class="setting-control"><input class="txt-input" id="in-org" style="min-width:260px" /></div>
+        <section class="panel">
+          <div class="panel-head">
+            <span class="panel-title">Backend</span>
+            <div class="right"><span class="pill" id="conn-badge" style="height:24px;font-size:10.5px">—</span></div>
           </div>
-
+          <div class="kv-list" id="backend-info"></div>
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Operator name</div>
-              <div class="d">Used on the profile page and in the audit trail.</div>
+              <div class="t">Connection test</div>
+              <div class="d" id="conn-detail">Calls <code>/api/health</code> and reports exactly what comes back.</div>
             </div>
-            <div class="setting-control"><input class="txt-input" id="in-operator" style="min-width:260px" /></div>
-          </div>
-
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="t">Export configuration</div>
-              <div class="d">Downloads these settings as JSON so they can be committed to the repo.</div>
-            </div>
-            <div class="setting-control"><button class="btn btn-ghost" id="btn-export-cfg">Download JSON</button></div>
+            <div class="setting-control"><button class="btn btn-ghost" id="btn-test">Test connection</button></div>
           </div>
         </section>
       </div>
@@ -206,7 +204,6 @@
 </div>
 
 <script src="assets/js/config.js"></script>
-<script src="assets/js/mock.js"></script>
 <script src="assets/js/api.js"></script>
 <script src="assets/js/ui.js"></script>
 <script src="assets/js/settings.js"></script>

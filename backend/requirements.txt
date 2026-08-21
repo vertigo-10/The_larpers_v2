@@ -1,0 +1,33 @@
+# SENTRY backend dependencies
+# Pinned for reproducible builds. Code targets Python 3.9+ so it runs
+# unchanged on the 3.12 image used in Docker.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# persistence
+SQLAlchemy==2.0.36
+alembic==1.14.0
+# Postgres driver for real deployments. SQLAlchemy 2.0 speaks psycopg3, so the
+# URL is postgresql+psycopg://... — a plain postgresql:// URL asks for psycopg2
+# and will fail to import. SQLite needs no driver, so this is dead weight for
+# local dev but harmless.
+psycopg[binary]==3.2.3
+
+# config + validation
+pydantic==2.10.4
+pydantic-settings==2.7.0
+email-validator==2.2.0
+
+# auth: bcrypt hashing + JWT sessions
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+PyJWT==2.10.1
+
+# model serving
+# torch 2.2.2 is the last release with cp39 macOS arm64 wheels.
+torch==2.2.2
+scikit-learn==1.6.1
+numpy==1.26.4
+joblib==1.4.2

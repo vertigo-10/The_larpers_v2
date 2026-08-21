@@ -1,129 +1,234 @@
+/**
+ * Settings.
+ *
+ * Two storage tiers, and the page is explicit about which is which:
+ *
+ *   - Detection, alerting and the org name live server-side under /api/settings
+ *     and apply to everyone in the organisation. Admin-only to change.
+ *   - Display preferences (poll interval, table size, API base URL) are local to
+ *     this browser, because they describe this screen, not the deployment.
+ *
+ * Non-admins see the shared section read-only rather than getting a 403 after
+ * filling the form in.
+ */
 (function () {
+  const api = window.SENTRY_API;
+  const ui = window.SENTRY_UI;
   const cfg = window.SENTRY_CONFIG;
   const KEY = window.SENTRY_SETTINGS_KEY;
-  const { icon, mountSidebar, toast } = window.SENTRY_UI;
-
+  const { esc, icon, fmt, toast } = ui;
   const el = (id) => document.getElementById(id);
 
-  function load() {
+  const SHARED = ["in-org", "in-threshold", "in-auto", "in-severity", "in-webhook", "in-notify"];
+
+  const state = { user: null, server: null, dirty: false };
+
+  ui.mountSidebar("settings");
+  el("btn-save").innerHTML = `${icon("check", 12)} Save changes`;
+  el("ico-notice").innerHTML = icon("info", 15);
+
+  init().catch((err) => {
+    if (err && err.status === 401) return;
+    ui.fatalBanner(err.message || "Cannot reach the SENTRY backend.");
+  });
+
+  async function init() {
+    state.user = await api.me();
+    el("topbar-avatar").textContent = state.user.initials || "··";
+    el("topbar-avatar").title = `${state.user.name} · ${state.user.role}`;
+    el("crumb").textContent = `/ ${state.user.org_name}`;
+    el("role-pill").textContent = state.user.role.toUpperCase();
+
+    state.server = await api.getSettings();
+    paintServer(state.server);
+    paintLocal();
+    applyRole();
+    await checkBackend();
+
+    SHARED.concat(["in-poll", "in-rows", "in-api"]).forEach((id) => {
+      const node = el(id);
+      if (node) node.addEventListener("input", () => { state.dirty = true; });
+    });
+
+    // Don't let someone navigate away thinking they saved.
+    window.addEventListener("beforeunload", (e) => {
+      if (!state.dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+  }
+
+  function paintServer(s) {
+    el("in-org").value = s.org_name || "";
+    el("in-threshold").value = Math.round(s.threshold * 100);
+    el("threshold-label").textContent = s.threshold.toFixed(2);
+    el("in-auto").checked = s.auto_mitigate;
+    el("in-severity").value = s.min_severity;
+    el("in-webhook").value = s.webhook_url || "";
+    el("in-notify").checked = s.notify_browser;
+
+    el("auto-desc").innerHTML = s.auto_mitigate
+      ? `Currently <b style="color:var(--amber)">on</b>. A false positive gets marked
+         without review — check the disagreement table on Model Performance before
+         relying on this.`
+      : `Automatically mark flows above τ as mitigated, without an operator
+         pressing anything.`;
+  }
+
+  function paintLocal() {
     let saved = {};
-    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (_) {}
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (_) { /* corrupt, ignore */ }
 
-    el("in-api").value = cfg.apiBaseUrl || "";
-    el("in-ws").value = cfg.wsUrl || "";
-    el("in-mock").checked = cfg.useMockData;
-    el("in-org").value = cfg.org;
-    el("in-operator").value = cfg.operator.name;
-    el("in-poll").value = String(cfg.pollIntervalMs);
-    el("in-rows").value = String(cfg.maxTableRows);
-    el("in-threshold").value = Math.round((saved.threshold ?? 0.85) * 100);
-    el("threshold-out").textContent = (saved.threshold ?? 0.85).toFixed(2);
-    el("in-auto").checked = saved.autoMitigate ?? true;
-    el("in-webhook").value = saved.webhook || "";
-    el("in-notify").checked = saved.notify ?? false;
-    if (saved.severity) el("in-severity").value = saved.severity;
+    el("in-api").value = saved.apiBaseUrl !== undefined ? saved.apiBaseUrl : cfg.apiBaseUrl || "";
+    setSelect("in-poll", saved.pollIntervalMs || cfg.pollIntervalMs);
+    setSelect("in-rows", saved.maxTableRows || cfg.maxTableRows);
   }
 
-  function collect() {
-    return {
+  function setSelect(id, value) {
+    const node = el(id);
+    const match = Array.prototype.find.call(node.options, (o) => Number(o.value) === Number(value));
+    // An unrecognised saved value would otherwise silently select the first
+    // option and look like the setting was ignored.
+    if (match) node.value = match.value;
+    else {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = `${value} (custom)`;
+      node.appendChild(opt);
+      node.value = String(value);
+    }
+  }
+
+  function applyRole() {
+    if (state.user.role === "admin") return;
+    SHARED.forEach((id) => {
+      const node = el(id);
+      if (!node) return;
+      node.disabled = true;
+      node.style.opacity = "0.5";
+      node.style.cursor = "not-allowed";
+    });
+    el("scope-text").innerHTML =
+      `Detection and alerting settings are shared across <b>${esc(state.user.org_name)}</b> and
+       can only be changed by an admin. Display settings below are yours and are
+       stored in this browser.`;
+    el("scope-notice").style.background = "rgba(255,181,69,0.06)";
+    el("scope-notice").style.borderColor = "rgba(255,181,69,0.22)";
+  }
+
+  el("in-threshold").addEventListener("input", (e) => {
+    el("threshold-label").textContent = (Number(e.target.value) / 100).toFixed(2);
+  });
+
+  // Asking for notification permission has to happen on a real user gesture.
+  el("in-notify").addEventListener("change", async (e) => {
+    if (!e.target.checked) return;
+    if (!("Notification" in window)) {
+      e.target.checked = false;
+      return toast("This browser has no notification support.", "err");
+    }
+    const perm = Notification.permission === "granted"
+      ? "granted"
+      : await Notification.requestPermission();
+    if (perm !== "granted") {
+      e.target.checked = false;
+      el("notify-desc").innerHTML =
+        `Blocked by the browser. Allow notifications for this site in your browser
+         settings, then turn this back on.`;
+      toast("Notification permission denied by the browser.", "err");
+    }
+  });
+
+  el("btn-save").addEventListener("click", async () => {
+    const btn = el("btn-save");
+    btn.disabled = true;
+    btn.innerHTML = "Saving…";
+
+    // ── local half: always allowed ────────────────────────────────────
+    const local = {
       apiBaseUrl: el("in-api").value.trim(),
-      wsUrl: el("in-ws").value.trim(),
-      useMockData: el("in-mock").checked,
       pollIntervalMs: Number(el("in-poll").value),
-      maxTableRows: Number(el("in-rows").value),
-      org: el("in-org").value.trim() || "Unnamed Org",
-      operator: { ...cfg.operator, name: el("in-operator").value.trim() || cfg.operator.name },
-      threshold: Number(el("in-threshold").value) / 100,
-      autoMitigate: el("in-auto").checked,
-      webhook: el("in-webhook").value.trim(),
-      notify: el("in-notify").checked,
-      severity: el("in-severity").value
+      maxTableRows: Number(el("in-rows").value)
     };
-  }
-
-  function save() {
-    const next = collect();
-    const name = next.operator.name.trim();
-    next.operator.initials = name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() || "OP";
-    localStorage.setItem(KEY, JSON.stringify(next));
-    toast("Settings saved");
-    setTimeout(() => location.reload(), 700);
-  }
-
-  async function testConnection() {
-    const base = el("in-api").value.trim();
-    const badge = el("conn-badge");
-    const detail = el("conn-detail");
-
-    if (!base) {
-      badge.textContent = "No URL set";
-      badge.className = "pill";
-      detail.textContent = "Enter the base URL of your detection service first.";
-      return;
-    }
-
-    badge.textContent = "Testing…";
-    badge.className = "pill";
-
     try {
-      const res = await fetch(`${base.replace(/\/$/, "")}/api/status`, { headers: { Accept: "application/json" } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      badge.textContent = "Connected";
-      badge.className = "pill live";
-      detail.innerHTML = `Reached <code>${base}</code> — model <code>${data.model || "unknown"}</code>, framework <code>${data.framework || "n/a"}</code>.`;
-      toast("Detection service reachable");
+      localStorage.setItem(KEY, JSON.stringify(local));
     } catch (err) {
-      badge.textContent = "Unreachable";
-      badge.className = "pill";
+      toast("Could not save display settings — browser storage is unavailable.", "err");
+    }
+
+    // ── shared half: admin only ───────────────────────────────────────
+    if (state.user.role === "admin") {
+      const payload = {
+        org_name: el("in-org").value.trim(),
+        threshold: Number(el("in-threshold").value) / 100,
+        auto_mitigate: el("in-auto").checked,
+        min_severity: el("in-severity").value,
+        webhook_url: el("in-webhook").value.trim(),
+        notify_browser: el("in-notify").checked
+      };
+      try {
+        state.server = await api.updateSettings(payload);
+        paintServer(state.server);
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerHTML = `${icon("check", 12)} Save changes`;
+        return toast(err.message, "err");
+      }
+    }
+
+    state.dirty = false;
+    btn.disabled = false;
+    btn.innerHTML = `${icon("check", 12)} Save changes`;
+    toast("Settings saved.");
+
+    // Display settings are read at page load, so a reload is the honest way to
+    // apply them rather than pretending they took effect everywhere.
+    if (local.apiBaseUrl !== (cfg.apiBaseUrl || "")) {
+      setTimeout(() => window.location.reload(), 700);
+    }
+  });
+
+  async function checkBackend() {
+    const badge = el("conn-badge");
+    badge.textContent = "Testing…";
+    try {
+      const [health, status] = await Promise.all([api.getHealth(), api.getStatus()]);
+      const ok = health.status === "ok";
+      badge.textContent = ok ? "HEALTHY" : "DEGRADED";
+      badge.style.color = ok ? "var(--green)" : "var(--amber)";
+      badge.style.borderColor = ok ? "rgba(47,224,138,0.35)" : "rgba(255,181,69,0.35)";
+
+      const rows = [
+        ["Status", health.status],
+        ["Database", health.database ? "reachable" : "unreachable"],
+        ["Model", health.model ? "loaded" : (status.model_error || "not loaded")],
+        ["Model name", status.model_name],
+        ["Classes", status.classes.join(", ")],
+        ["Training data", status.dataset],
+        ["Traffic simulator", status.simulator ? "running" : "off"],
+        ["Uptime", fmt.uptime(status.uptime_s)],
+        ["Version", status.version]
+      ];
+      el("backend-info").innerHTML = rows.map(([k, v]) => `
+        <div class="kv"><span class="k">${esc(k)}</span><span class="v mono">${esc(v)}</span></div>`).join("");
+
+      el("conn-detail").innerHTML = status.dataset_note
+        ? esc(status.dataset_note)
+        : "Calls <code>/api/health</code> and reports exactly what comes back.";
+    } catch (err) {
+      badge.textContent = "UNREACHABLE";
       badge.style.color = "var(--red)";
-      detail.innerHTML = `Could not reach <code>${base}/api/status</code> — ${err.message}. Check the service is running and that CORS allows this origin.`;
-      toast("Connection failed", "err");
+      badge.style.borderColor = "rgba(255,80,100,0.35)";
+      el("backend-info").innerHTML =
+        `<div class="section-note">${esc(err.message)}</div>`;
     }
   }
 
-  function exportConfig() {
-    const blob = new Blob([JSON.stringify(collect(), null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "sentry-settings.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast("Configuration downloaded");
-  }
-
-  function init() {
-    mountSidebar("settings");
-    el("btn-save").innerHTML = `${icon("check", 12)} Save changes`;
-    el("btn-reset").innerHTML = `${icon("refresh", 12)} Reset`;
-    el("topbar-avatar").textContent = cfg.operator.initials;
-
-    load();
-
-    el("in-threshold").addEventListener("input", (e) => {
-      el("threshold-out").textContent = (e.target.value / 100).toFixed(2);
-    });
-
-    el("btn-save").addEventListener("click", save);
-    el("btn-test").addEventListener("click", testConnection);
-    el("btn-export-cfg").addEventListener("click", exportConfig);
-
-    el("btn-reset").addEventListener("click", () => {
-      localStorage.removeItem(KEY);
-      toast("Reset to defaults");
-      setTimeout(() => location.reload(), 700);
-    });
-
-    el("in-notify").addEventListener("change", async (e) => {
-      if (e.target.checked && "Notification" in window) {
-        const perm = await Notification.requestPermission();
-        if (perm !== "granted") {
-          e.target.checked = false;
-          toast("Notification permission denied", "err");
-        }
-      }
-    });
-  }
-
-  init();
+  el("btn-test").addEventListener("click", async () => {
+    const btn = el("btn-test");
+    btn.disabled = true;
+    await checkBackend();
+    btn.disabled = false;
+    toast("Connection tested.");
+  });
 })();

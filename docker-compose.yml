@@ -1,0 +1,60 @@
+# Local production-shaped stack: the app against a real Postgres rather than
+# SQLite, so you exercise the same driver and transaction behaviour you will
+# get in the cloud.
+#
+#   cp .env.example .env   # then edit SENTRY_SECRET_KEY
+#   docker compose up --build
+#
+# Dashboard on http://localhost:8000
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sentry
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentry-local-dev}
+      POSTGRES_DB: sentry
+    volumes:
+      - sentry-db:/var/lib/postgresql/data
+    healthcheck:
+      # Without this the app races the database on first boot and crashes on a
+      # connection refused before Postgres has finished initialising.
+      test: ["CMD-SHELL", "pg_isready -U sentry -d sentry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Not published to the host. Nothing outside the compose network needs to
+    # reach the database directly, and exposing 5432 with a dev password is a
+    # standing invitation.
+    expose:
+      - "5432"
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SENTRY_ENV: production
+      # psycopg3 dialect — see the note in backend/requirements.txt.
+      SENTRY_DATABASE_URL: postgresql+psycopg://sentry:${POSTGRES_PASSWORD:-sentry-local-dev}@db:5432/sentry
+      # Same-origin: the app serves the dashboard, so this only needs to list
+      # the address you actually browse to.
+      SENTRY_CORS_ORIGINS: http://localhost:8000
+      # Loopback HTTP has no TLS, so a Secure cookie would never be sent back
+      # and you could not stay logged in. Behind real HTTPS, drop this line and
+      # let production default it to true.
+      SENTRY_COOKIE_SECURE: "false"
+      # Env is production, so the simulator is off unless you say otherwise.
+      # Set to "true" for a demo with live-looking traffic.
+      SENTRY_SIMULATOR_ENABLED: "${SENTRY_SIMULATOR_ENABLED:-false}"
+    env_file:
+      # Carries SENTRY_SECRET_KEY. Production refuses to start without it.
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  sentry-db:

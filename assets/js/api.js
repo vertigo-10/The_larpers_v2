@@ -1,105 +1,203 @@
+/**
+ * API client.
+ *
+ * Two rules this file exists to enforce:
+ *   1. There is no mock fallback. If the backend is unreachable the UI says so
+ *      and renders nothing rather than inventing traffic. The previous version
+ *      silently substituted random data — for a security tool that means
+ *      showing a calm, green dashboard during an outage.
+ *   2. Every request carries the session cookie, and a 401 bounces to the login
+ *      page, so no view ever renders half-authenticated.
+ */
 (function () {
   const cfg = window.SENTRY_CONFIG;
-  const mock = window.SENTRY_MOCK;
 
-  const live = { connected: false, socket: null, listeners: [], degraded: false };
+  const state = {
+    socket: null,
+    connected: false,
+    listeners: { flow: [], metric: [], status: [] },
+    reconnectDelay: 1000,
+    lastError: null,
+    user: null
+  };
 
-  function url(path) { return `${cfg.apiBaseUrl.replace(/\/$/, "")}${path}`; }
+  const AUTH_PAGES = ["/login.html", "/signup.html"];
+  const onAuthPage = () => AUTH_PAGES.some((p) => window.location.pathname.endsWith(p));
 
-  async function get(path) {
-    const res = await fetch(url(path), { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return res.json();
+  function url(path) {
+    return `${(cfg.apiBaseUrl || "").replace(/\/$/, "")}${path}`;
   }
 
-  // Every endpoint falls back to the mock engine so the UI runs standalone
-  // before the PyTorch service is wired up.
-  async function withFallback(path, fallback) {
-    if (cfg.useMockData || !cfg.apiBaseUrl) return fallback();
-    try {
-      const data = await get(path);
-      live.degraded = false;
-      return data;
-    } catch (err) {
-      live.degraded = true;
-      console.warn(`[sentry] ${path} unavailable, using mock:`, err.message);
-      return fallback();
+  class ApiError extends Error {
+    constructor(message, status, body) {
+      super(message);
+      this.status = status;
+      this.body = body;
     }
   }
 
+  async function request(path, options = {}) {
+    const opts = Object.assign(
+      {
+        credentials: "include", // session cookie
+        headers: Object.assign(
+          { Accept: "application/json" },
+          options.body ? { "Content-Type": "application/json" } : {}
+        )
+      },
+      options
+    );
+
+    let res;
+    try {
+      res = await fetch(url(path), opts);
+    } catch (err) {
+      state.lastError = `Cannot reach the API (${err.message})`;
+      throw new ApiError(state.lastError, 0, null);
+    }
+
+    if (res.status === 401) {
+      state.user = null;
+      if (!onAuthPage()) {
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = `login.html?next=${next}`;
+      }
+      throw new ApiError("Not authenticated", 401, null);
+    }
+
+    let body = null;
+    const text = await res.text();
+    if (text) {
+      try { body = JSON.parse(text); } catch (_) { body = text; }
+    }
+
+    if (!res.ok) {
+      const detail =
+        (body && body.detail) || (typeof body === "string" ? body : `HTTP ${res.status}`);
+      const message = Array.isArray(detail)
+        ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+        : detail;
+      throw new ApiError(message, res.status, body);
+    }
+
+    state.lastError = null;
+    return body;
+  }
+
+  const get = (p) => request(p);
+  const post = (p, data) => request(p, { method: "POST", body: JSON.stringify(data || {}) });
+  const patch = (p, data) => request(p, { method: "PATCH", body: JSON.stringify(data || {}) });
+  const del = (p) => request(p, { method: "DELETE" });
+
   const api = {
-    isLive: () => !cfg.useMockData && !!cfg.apiBaseUrl,
+    ApiError,
 
-    getStatus: () => withFallback("/api/status", () => ({
-      model: cfg.model.name,
-      framework: cfg.model.framework,
-      dataset: cfg.model.dataset,
-      accuracy: cfg.model.accuracy,
-      uptime_s: 372840,
-      source: "mock"
-    })),
+    // ── auth ────────────────────────────────────────────────────────────
+    signup: (data) => post("/api/auth/signup", data),
+    login: (data) => post("/api/auth/login", data),
+    logout: () => post("/api/auth/logout"),
+    changePassword: (data) => post("/api/auth/password", data),
+    bootstrap: () => get("/api/auth/bootstrap"),
 
-    getHistory: (points) => withFallback(`/api/metrics/history?points=${points}`,
-      () => mock.seedHistory(points)),
-
-    getPoint: () => withFallback("/api/metrics/current", () => mock.nextPoint()),
-
-    getSummary: () => withFallback("/api/summary", () => mock.summary()),
-
-    getFlows: (limit) => withFallback(`/api/flows?limit=${limit}`,
-      () => Array.from({ length: limit }, () => mock.nextFlow())),
-
-    getFlow: () => withFallback("/api/flows/next", () => mock.nextFlow()),
-
-    getClassBreakdown: () => withFallback("/api/analytics/classes", () => mock.classBreakdown()),
-
-    getNodeTraffic: () => withFallback("/api/analytics/nodes", () => mock.nodeTraffic()),
-
-    getPortActivity: () => withFallback("/api/analytics/ports", () => mock.portActivity()),
-
-    getNodeStats: () => withFallback("/api/nodes", () => mock.nodeStats()),
-
-    async mitigate(flowId, srcIp) {
-      if (!api.isLive()) return { ok: true, flow_id: flowId, action: "blocked", source: "mock" };
-      const res = await fetch(url("/api/mitigate"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flow_id: flowId, src_ip: srcIp })
-      });
-      return res.json();
+    async me(force) {
+      if (state.user && !force) return state.user;
+      state.user = await get("/api/auth/me");
+      return state.user;
     },
-
-    async setThreshold(value) {
-      if (!api.isLive()) return { ok: true, threshold: value, source: "mock" };
-      const res = await fetch(url("/api/model/threshold"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threshold: value })
-      });
-      return res.json();
+    // Self-service profile edit. Separate from updateMember (admin-only) on
+    // purpose: this route cannot change role or active status.
+    async updateProfile(data) {
+      state.user = await patch("/api/auth/me", data);
+      return state.user;
     },
+    cachedUser: () => state.user,
 
-    onFlow(fn) { live.listeners.push(fn); },
+    // ── status + metrics ────────────────────────────────────────────────
+    getStatus: () => get("/api/status"),
+    getHealth: () => get("/api/health"),
+    getSummary: () => get("/api/summary"),
+    getHistory: (points) => get(`/api/metrics/history?points=${points}`),
+    getCurrent: () => get("/api/metrics/current"),
+
+    // ── flows ───────────────────────────────────────────────────────────
+    getFlows({ limit = 50, tab = "live", q = "", node = "all" } = {}) {
+      const params = new URLSearchParams({ limit, tab });
+      if (q) params.set("q", q);
+      if (node && node !== "all") params.set("node", node);
+      return get(`/api/flows?${params.toString()}`);
+    },
+    ingest: (flows) => post("/api/ingest", { flows }),
+
+    // ── analytics ───────────────────────────────────────────────────────
+    getClassBreakdown: () => get("/api/analytics/classes"),
+    getNodeTraffic: () => get("/api/analytics/nodes"),
+    getPortActivity: () => get("/api/analytics/ports"),
+    getNodes: () => get("/api/nodes"),
+
+    // ── incidents ───────────────────────────────────────────────────────
+    getIncidents: (status = "all", limit = 100) =>
+      get(`/api/incidents?status=${status}&limit=${limit}`),
+    incidentAction: (id, action) => post(`/api/incidents/${id}/action`, { action }),
+
+    // ── actions ─────────────────────────────────────────────────────────
+    mitigate: (flowId, srcIp) => post("/api/mitigate", { flow_id: flowId, src_ip: srcIp }),
+    setThreshold: (value) => post("/api/model/threshold", { threshold: value }),
+    getModelMetrics: () => get("/api/model/metrics"),
+
+    // ── settings + team ─────────────────────────────────────────────────
+    getSettings: () => get("/api/settings"),
+    updateSettings: (data) => patch("/api/settings", data),
+    getTeam: () => get("/api/team"),
+    addMember: (data) => post("/api/team", data),
+    updateMember: (id, data) => patch(`/api/team/${id}`, data),
+    removeMember: (id) => del(`/api/team/${id}`),
+    getAudit: (limit = 100) => get(`/api/team/audit?limit=${limit}`),
+
+    // ── reports ─────────────────────────────────────────────────────────
+    getReport: (days = 7) => get(`/api/reports/summary?days=${days}`),
+
+    // ── live stream ─────────────────────────────────────────────────────
+    on(event, fn) {
+      if (state.listeners[event]) state.listeners[event].push(fn);
+    },
 
     connectStream() {
-      if (!cfg.wsUrl || cfg.useMockData) return false;
+      if (state.socket && state.socket.readyState <= 1) return;
       try {
-        live.socket = new WebSocket(cfg.wsUrl);
-        live.socket.onopen = () => { live.connected = true; };
-        live.socket.onclose = () => { live.connected = false; };
-        live.socket.onmessage = (ev) => {
-          try { live.listeners.forEach(fn => fn(JSON.parse(ev.data))); } catch (_) {}
+        const socket = new WebSocket(cfg.wsUrl);
+        state.socket = socket;
+
+        socket.onopen = () => {
+          state.connected = true;
+          state.reconnectDelay = 1000;
+          state.listeners.status.forEach((fn) => fn(true));
         };
-        return true;
+
+        socket.onmessage = (ev) => {
+          let msg;
+          try { msg = JSON.parse(ev.data); } catch (_) { return; }
+          const handlers = state.listeners[msg.type];
+          if (handlers) handlers.forEach((fn) => fn(msg.data));
+        };
+
+        socket.onclose = () => {
+          state.connected = false;
+          state.listeners.status.forEach((fn) => fn(false));
+          // Exponential backoff, capped — avoids hammering a restarting server.
+          if (!onAuthPage()) {
+            setTimeout(() => api.connectStream(), state.reconnectDelay);
+            state.reconnectDelay = Math.min(state.reconnectDelay * 2, 30000);
+          }
+        };
+
+        socket.onerror = () => socket.close();
       } catch (err) {
         console.warn("[sentry] websocket failed:", err.message);
-        return false;
       }
     },
 
-    streamConnected: () => live.connected,
-
-    isDegraded: () => live.degraded
+    isStreamConnected: () => state.connected,
+    lastError: () => state.lastError
   };
 
   window.SENTRY_API = api;

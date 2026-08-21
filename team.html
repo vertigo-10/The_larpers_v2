@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Team — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Team</h1>
+      <span class="crumb" id="crumb">/ organisation</span>
+      <div class="topbar-right">
+        <button class="btn btn-primary" id="btn-add"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="notice">
+        <span id="ico-notice"></span>
+        <span>
+          <b>Admin</b> changes settings and manages the team.
+          <b>Analyst</b> can mitigate and work incidents.
+          <b>Viewer</b> can read everything and change nothing.
+          Members only ever see data belonging to this organisation.
+        </span>
+      </div>
+
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-head">
+          <span class="panel-title">Members</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="count-pill">—</span></div>
+        </div>
+        <div class="table-scroll" style="max-height:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Member</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Joined</th>
+                <th>Last sign-in</th>
+                <th style="text-align:right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="team-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" id="audit-panel">
+        <div class="panel-head">
+          <span class="panel-title">Audit trail</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px">who did what</span></div>
+        </div>
+        <div class="table-scroll" style="max-height:420px">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Who</th>
+                <th>Action</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody id="audit-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- add member -->
+<div class="modal-back" id="add-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="ico-add"></span>
+      <span class="t">Add team member</span>
+      <button class="x" id="add-close"></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-error" id="add-err"></div>
+      <div class="field">
+        <label for="m-name">Name</label>
+        <input type="text" id="m-name" maxlength="120" placeholder="Alex Doyle" />
+      </div>
+      <div class="field">
+        <label for="m-email">Work email</label>
+        <input type="email" id="m-email" placeholder="alex@company.com" />
+      </div>
+      <div class="field">
+        <label for="m-role">Role</label>
+        <select id="m-role" class="sel-input" style="min-width:0">
+          <option value="viewer">Viewer — read only</option>
+          <option value="analyst" selected>Analyst — can mitigate</option>
+          <option value="admin">Admin — full control</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="m-pass">Initial password</label>
+        <input type="text" id="m-pass" placeholder="at least 12 characters" autocomplete="off" />
+        <span class="hint">
+          You will see this password, so it is only a starting point — the new
+          member should change it on first sign-in. A production deployment
+          should send an email invite instead.
+        </span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="add-cancel">Cancel</button>
+      <button class="btn btn-primary" id="add-save">Add member</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/config.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/ui.js"></script>
+<script src="assets/js/team.js"></script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Network Nodes — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Network Nodes</h1>
+      <span class="crumb">/ monitored links</span>
+      <div class="topbar-right">
+        <button class="pill" id="btn-refresh"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="notice">
+        <span id="ico-notice"></span>
+        <span>
+          Nodes are the collection points flows are attributed to. Throughput and
+          attack counts cover the last five minutes. A node turns amber once more
+          than eight flagged flows arrive from it in that window.
+        </span>
+      </div>
+
+      <div class="node-grid" id="node-grid"></div>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-head">
+          <span class="panel-title">Recent flows on selected node</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="sel-pill">all nodes</span></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Flow</th>
+                <th>Source IP</th>
+                <th>Dst port</th>
+                <th>Proto</th>
+                <th>Packets</th>
+                <th>Throughput</th>
+                <th>Prediction</th>
+                <th>Confidence</th>
+              </tr>
+            </thead>
+            <tbody id="flow-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/config.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/ui.js"></script>
+<script src="assets/js/nodes.js"></script>
+</body>
+</html>

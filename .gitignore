@@ -4,3 +4,17 @@ __pycache__/
 venv/
 .DS_Store
 *.log
+
+# Local secrets. SENTRY_SECRET_KEY signs session cookies, so a committed .env
+# would mean anyone with repo access can forge a session.
+.env
+
+# SQLite databases, including the WAL sidecar files.
+*.db
+*.db-shm
+*.db-wal
+
+# Editor/tooling scratch
+.claude/
+.idea/
+.vscode/
