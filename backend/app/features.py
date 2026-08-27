@@ -32,6 +32,9 @@ _FEATURES: Dict[str, Dict[str, bool]] = {
         # and someone has to be able to answer "who turned that off".
         "roles": True,
         "audit_log": True,
+        # Employees join by invite code or company email domain, and wait for
+        # an admin to approve them.
+        "invites": True,
         # Multiple collectors across sites, each with its own revocable key.
         "api_keys": True,
         "multiple_api_keys": True,
@@ -47,6 +50,10 @@ _FEATURES: Dict[str, Dict[str, bool]] = {
         # A household is not an org chart. Everyone who is in it, is in it.
         "roles": False,
         "audit_log": False,
+        # No self-service joining: a household has no domain to match on, and
+        # a queue of strangers requesting access to your home network is a
+        # liability rather than a feature. Someone already inside adds you.
+        "invites": False,
         # Kept: this is how the collector authenticates, so removing it would
         # mean a household could not connect anything at all. Presented as
         # "connect a device" rather than as credential management.

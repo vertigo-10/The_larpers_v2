@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260827" />
 </head>
 <body>
 <div class="app">
@@ -36,17 +36,34 @@
 
         <section class="panel" style="margin-bottom:14px">
           <div class="panel-head">
-            <span class="panel-title">Organisation</span>
+            <span class="panel-title" id="org-panel-title">Organisation</span>
             <div class="right"><span class="pill" style="height:24px;font-size:10.5px">shared</span></div>
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <div class="t">Organisation name</div>
-              <div class="d">Shown across the dashboard and on exported reports.</div>
+              <div class="t" id="org-name-label">Organisation name</div>
+              <div class="d" id="org-name-desc">Shown across the dashboard and on exported reports.</div>
             </div>
             <div class="setting-control">
               <input class="txt-input" id="in-org" maxlength="120" style="min-width:260px" />
+            </div>
+          </div>
+
+          <div class="setting-row" data-requires-feature="invites">
+            <div class="setting-info">
+              <div class="t">Company email domain</div>
+              <div class="d">
+                Colleagues with an email address on this domain can request
+                access without you issuing them a code. They still land in the
+                approval queue — nothing here verifies that someone owns the
+                address they typed, so a domain match is a hint, never a key.
+                Leave blank to require an invite for everyone.
+              </div>
+            </div>
+            <div class="setting-control">
+              <input class="txt-input" id="in-domain" maxlength="255"
+                     spellcheck="false" placeholder="acme.com" style="min-width:260px" />
             </div>
           </div>
         </section>
@@ -241,9 +258,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js?v=20260826"></script>
-<script src="assets/js/api.js?v=20260826"></script>
-<script src="assets/js/ui.js?v=20260826"></script>
-<script src="assets/js/settings.js?v=20260826"></script>
+<script src="assets/js/config.js?v=20260827"></script>
+<script src="assets/js/api.js?v=20260827"></script>
+<script src="assets/js/ui.js?v=20260827"></script>
+<script src="assets/js/settings.js?v=20260827"></script>
 </body>
 </html>

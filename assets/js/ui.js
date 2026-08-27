@@ -65,13 +65,23 @@
   }
 
   // Every entry here is a page that exists and works.
+  //
+  // `only` restricts an entry to one account type. It is presentation, not
+  // permission — the pages themselves check, and the API checks under them.
+  // What it buys is that a household is not handed a nav full of screens built
+  // for a security rota it does not have.
   const NAV = [
     {
       label: "Monitoring", key: "monitoring", icon: "radar", open: true, items: [
-        { label: "Live Overview", href: "index.html", key: "dashboard", icon: "activity" },
+        { label: "Home", href: "home-index.html", key: "home",
+          icon: "home", only: "consumer" },
+        { label: "Live Overview", href: "index.html", key: "dashboard",
+          icon: "activity", only: "company" },
         { label: "Alerts & Incidents", href: "alerts.html", key: "alerts", icon: "alert" },
-        { label: "Traffic Analysis", href: "traffic.html", key: "traffic", icon: "globe" },
-        { label: "Baseline & Anomalies", href: "baseline.html", key: "baseline", icon: "chart" },
+        { label: "Traffic Analysis", href: "traffic.html", key: "traffic",
+          icon: "globe", only: "company" },
+        { label: "Baseline & Anomalies", href: "baseline.html", key: "baseline",
+          icon: "chart", only: "company" },
         { label: "Network Nodes", href: "nodes.html", key: "nodes", icon: "router" }
       ]
     },
@@ -82,10 +92,23 @@
         // confusion matrix invites breaking detection by fiddling.
         { label: "Model Performance", href: "model.html", key: "model",
           icon: "cpu", feature: "model_tuning" },
-        { label: "Reports", href: "reports.html", key: "reports", icon: "file" }
+        { label: "Reports", href: "reports.html", key: "reports",
+          icon: "file", only: "company" }
       ]
     }
   ];
+
+  /**
+   * Where an account belongs after signing in.
+   *
+   * One function, called from the auth pages and from the page guard below, so
+   * "which dashboard is yours" is answered in exactly one place. Two copies of
+   * this rule would eventually disagree, and the failure mode is a household
+   * staring at an enterprise incident console.
+   */
+  function landingFor(user) {
+    return user && user.org_type === "consumer" ? "home-index.html" : "index.html";
+  }
 
   const FOOT_NAV = [
     { label: "Profile", href: "profile.html", key: "profile", icon: "user" },
@@ -115,7 +138,13 @@
       teamNotice: "<b>Admin</b> changes settings and manages the team. " +
         "<b>Analyst</b> can mitigate and work incidents. <b>Viewer</b> can " +
         "read everything and change nothing. Members only ever see data " +
-        "belonging to this organisation."
+        "belonging to this organisation.",
+      settingsTitle: "Organisation",
+      settingsNameLabel: "Organisation name",
+      settingsNameDesc: "Shown across the dashboard and on exported reports.",
+      settingsScope: "Settings in <b>Detection</b> and <b>Alerting</b> are shared " +
+        "by everyone in your organisation. <b>Display</b> settings are stored in " +
+        "this browser only."
     },
     consumer: {
       nodesNav: "My Devices",
@@ -132,7 +161,13 @@
       teamNotice: "<b>Admin</b> changes settings and manages who's in the " +
         "household. <b>Analyst</b> can mitigate and work incidents. " +
         "<b>Viewer</b> can read everything and change nothing. Everyone " +
-        "here only ever sees this household's own data."
+        "here only ever sees this household's own data.",
+      settingsTitle: "Household",
+      settingsNameLabel: "Household name",
+      settingsNameDesc: "Shown across the top of every page.",
+      settingsScope: "Settings in <b>Detection</b> and <b>Alerting</b> apply to " +
+        "everyone in your household. <b>Display</b> settings are stored in this " +
+        "browser only."
     }
   };
 
@@ -144,7 +179,22 @@
   /** Relabel the parts of the shared chrome that read differently per org type. */
   function applyOrgProfile(orgType) {
     const copy = orgCopy(orgType);
-    document.body.setAttribute("data-org-type", orgType || "company");
+    const type = orgType || "company";
+    document.body.setAttribute("data-org-type", type);
+
+    // Drop nav entries belonging to the other account type. Removed rather
+    // than hidden, for the same reason as the feature gates: an inert control
+    // left in the tree is how a hidden link eventually gets mistaken for a
+    // permission.
+    document.querySelectorAll("[data-org-only]").forEach((el) => {
+      if (el.getAttribute("data-org-only") !== type) el.remove();
+    });
+    // A group whose every child just disappeared would otherwise render as a
+    // header that expands into nothing.
+    document.querySelectorAll(".nav-group").forEach((group) => {
+      if (!group.querySelector(".nav-sub a")) group.remove();
+    });
+
     const nodesLink = document.querySelector('.nav-sub a[href="nodes.html"] span');
     if (nodesLink) nodesLink.textContent = copy.nodesNav;
     const teamLink = document.querySelector('.nav-item[href="team.html"] span');
@@ -187,7 +237,8 @@
       const open = hasActive || g.open;
       const subs = g.items.map((i) => `
         <a href="${i.href}" class="${i.key === activeKey ? "is-active" : ""}"
-           ${i.feature ? `data-requires-feature="${esc(i.feature)}"` : ""}>
+           ${i.feature ? `data-requires-feature="${esc(i.feature)}"` : ""}
+           ${i.only ? `data-org-only="${esc(i.only)}"` : ""}>
           ${icon(i.icon, 12)}<span>${esc(i.label)}</span>
         </a>`).join("");
       return `
@@ -290,6 +341,18 @@
       const acc = document.getElementById("sb-accuracy");
       const org = document.getElementById("sb-org");
 
+      // A page can declare which account type it is written for. Landing on
+      // the wrong one is not a security failure — every endpoint behind it is
+      // scoped and gated independently — but a household dropped into the
+      // enterprise incident console has no idea what it is looking at.
+      // `replace` rather than `href` so the back button does not bounce them
+      // straight back into it.
+      const scope = document.body.getAttribute("data-org-scope");
+      if (scope && user.org_type && scope !== user.org_type) {
+        window.location.replace(landingFor(user));
+        return;
+      }
+
       if (model) model.textContent = status.model_name || "model";
       if (org) org.textContent = user.org_name || "";
       applyOrgProfile(user.org_type);
@@ -350,6 +413,15 @@
     toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
   }
 
+  /** Coarse magnitude of a millisecond gap, without a direction on it. */
+  function span(ms) {
+    const s = Math.max(0, ms / 1000);
+    if (s < 60) return `${Math.floor(s)}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h`;
+    return `${Math.floor(s / 86400)}d`;
+  }
+
   const fmt = {
     num: (n, d = 0) =>
       Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }),
@@ -377,11 +449,16 @@
       return `${d.toLocaleDateString("en-GB")} ${d.toLocaleTimeString("en-GB", { hour12: false })}`;
     },
     ago(ts) {
-      const s = Math.max(0, (Date.now() - ts) / 1000);
-      if (s < 60) return `${Math.floor(s)}s ago`;
-      if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-      if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-      return `${Math.floor(s / 86400)}d ago`;
+      return `${span(Date.now() - ts)} ago`;
+    },
+    /**
+     * Counterpart to `ago` for a time that has not arrived yet, such as an
+     * invite expiry. `ago` clamps a negative gap to zero, so pointing it at a
+     * future timestamp reports every still-valid credential as "0s" — which
+     * reads as already expired, the opposite of the truth.
+     */
+    until(ts) {
+      return `${span(ts - Date.now())} from now`;
     },
     dur(s) {
       s = Number(s) || 0;
@@ -428,6 +505,6 @@
   window.SENTRY_UI = {
     icon, esc, mountSidebar, setStreamState, toast, fmt,
     classMeta, severityMeta, fatalBanner, clearFatal, ICONS,
-    orgCopy, applyOrgProfile, applyFeatureGates
+    orgCopy, applyOrgProfile, applyFeatureGates, landingFor
   };
 })();

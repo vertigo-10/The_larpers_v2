@@ -21,12 +21,50 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 
 from .db import Base
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UtcDateTime(TypeDecorator):
+    """A datetime that is still UTC-aware after a round trip through SQLite.
+
+    SQLite has no timezone type, so a value written as aware reads back naive
+    even from DateTime(timezone=True). Anything that then calls .timestamp() or
+    hands the value to Pydantic gets it reinterpreted in the server's local
+    zone — an audit entry written seconds ago rendered as hours old, and, worse,
+    an invite expiry compared against the wrong instant.
+
+    Normalising on the way in and out fixes every reader at once, rather than
+    asking each call site to remember the guard.
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        return dialect.type_descriptor(DateTime(timezone=True))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        # A naive value here is a bug upstream, but storing it as if it were
+        # local would bake the mistake in. UTC is the only assumption that
+        # matches everything else this app writes.
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class Role(str, enum.Enum):
@@ -39,6 +77,20 @@ class IncidentStatus(str, enum.Enum):
     open = "open"
     acknowledged = "acknowledged"
     resolved = "resolved"
+
+
+class UserStatus(str, enum.Enum):
+    """Whether an account has been let in yet.
+
+    Deliberately separate from `is_active`. That flag means "an admin turned
+    this person off"; this one means "this person has asked to join and nobody
+    has decided yet". Collapsing them would make a brand-new joiner
+    indistinguishable from a suspended employee in the team list, which is
+    exactly the distinction an admin needs in order to act.
+    """
+
+    active = "active"
+    pending = "pending"
 
 
 class OrgType(str, enum.Enum):
@@ -65,7 +117,19 @@ class Org(Base):
     # topology they were already seeded with — not "consumer", which would
     # silently relabel a workspace nobody asked to relabel.
     org_type: Mapped[str] = mapped_column(String(20), default=OrgType.consumer.value)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    # Lets an employee find their employer during signup without an invite.
+    # Stored lowercase and bare ("acme.com", no "@"). Empty means the org
+    # cannot be joined this way and an invite code is the only route in.
+    #
+    # Note this is a *discovery* mechanism, not an authentication one: nothing
+    # in this application verifies that a person controls the address they
+    # signed up with, so a domain match alone must never grant access. It
+    # places the joiner in a pending state for an admin to approve, and that
+    # admin is shown that the address is unverified.
+    email_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
     users: Mapped[list["User"]] = relationship(back_populates="org", cascade="all, delete-orphan")
     settings: Mapped[Optional["OrgSettings"]] = relationship(
@@ -88,8 +152,18 @@ class User(Base):
     title: Mapped[str] = mapped_column(String(120), default="Security Analyst")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # See UserStatus: "pending" is awaiting admin approval, not suspended.
+    status: Mapped[str] = mapped_column(
+        String(20), default=UserStatus.active.value, index=True
+    )
+    # How this person got into the org, kept so an admin approving a request
+    # can see whether anyone actually invited them. A domain match is a claim,
+    # an invite is a decision, and the approval screen should not present the
+    # two as equivalent.
+    join_method: Mapped[str] = mapped_column(String(20), default="founder")
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
 
     # Server-side session revocation. Every token embeds the version it was
     # minted against; bumping this invalidates all of them at once. That is
@@ -163,22 +237,100 @@ class ApiKey(Base):
     # settings, or manage the team.
     scope: Mapped[str] = mapped_column(String(20), default="ingest")
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
     created_by_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     last_used_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UtcDateTime, nullable=True
     )
     # Soft revocation: the row survives so the audit trail still resolves which
     # key performed past actions.
     revoked_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UtcDateTime, nullable=True
     )
 
     @property
     def is_active(self) -> bool:
         return self.revoked_at is None
+
+
+class Invite(Base):
+    """A single-use code that lets one named person join an existing org.
+
+    Modelled on ApiKey rather than on a password: the secret is 32 random
+    bytes, so it is hashed with SHA-256 (not bcrypt) for the reasons given on
+    ApiKey.key_hash, returned to the admin exactly once, and never recoverable.
+
+    The distinct `sentry_inv_` prefix matters. Collector keys live unattended
+    on capture devices; invite codes create user accounts. If the two shared a
+    prefix, a key scraped off a Raspberry Pi would be indistinguishable from a
+    credential that mints logins, and a copy-paste error could hand one out in
+    place of the other.
+
+    Single-use and expiring by design: an invite is a decision an admin made
+    about one person at one moment, and it should not outlive that. A code
+    that still works six months later is a standing password to a security
+    dashboard sitting in somebody's inbox.
+    """
+
+    __tablename__ = "invites"
+    __table_args__ = (Index("ix_invites_org_open", "org_id", "used_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+
+    prefix: Mapped[str] = mapped_column(String(20), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    # Who it is for, and enforced at redemption rather than merely recorded:
+    # /api/auth/join refuses a code presented by any other address. An invite
+    # is a decision about one named person, so a code forwarded to a colleague
+    # — or lifted out of a mailbox — must not work for whoever ends up holding
+    # it. The cost is that a typo here kills the invite and it has to be
+    # reissued, which is the safe direction to fail.
+    invitee_email: Mapped[str] = mapped_column(String(255), default="")
+
+    # The role the joiner receives on approval, chosen by the admin when the
+    # invite is issued.
+    role: Mapped[str] = mapped_column(String(20), default=Role.viewer.value)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    created_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime)
+
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True
+    )
+    used_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Soft revocation, matching ApiKey: the row survives so the audit trail
+    # still resolves who issued an invite that was later withdrawn.
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True
+    )
+
+    def state(self, now: Optional[datetime] = None) -> str:
+        """One word for the list view. Order matters: a used code is spent
+        whatever else is true of it, and revocation beats mere expiry."""
+        now = now or datetime.now(timezone.utc)
+        if self.used_at is not None:
+            return "used"
+        if self.revoked_at is not None:
+            return "revoked"
+        # SQLite has no timezone type, so a value written as aware reads back
+        # naive. Comparing the two raises, and this comparison is the one
+        # deciding whether a credential still works — so the value is pinned
+        # to UTC rather than left to whatever the server's local zone is.
+        expires = self.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires <= now:
+            return "expired"
+        return "open"
 
 
 class Node(Base):
@@ -193,7 +345,7 @@ class Node(Base):
     description: Mapped[str] = mapped_column(String(200), default="")
     status: Mapped[str] = mapped_column(String(20), default="ok")
     mbps: Mapped[float] = mapped_column(Float, default=0.0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
 
 class Flow(Base):
@@ -209,7 +361,7 @@ class Flow(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
     flow_ref: Mapped[str] = mapped_column(String(40), index=True)
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ts: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
 
     src_ip: Mapped[str] = mapped_column(String(45))
     dst_port: Mapped[int] = mapped_column(Integer)
@@ -257,9 +409,9 @@ class Incident(Base):
     label: Mapped[str] = mapped_column(String(30))
     node: Mapped[str] = mapped_column(String(60))
 
-    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
 
     flow_count: Mapped[int] = mapped_column(Integer, default=1)
     peak_confidence: Mapped[float] = mapped_column(Float, default=0.0)
@@ -282,7 +434,7 @@ class MetricPoint(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ts: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
     throughput: Mapped[float] = mapped_column(Float)
     threat: Mapped[float] = mapped_column(Float)
     flows: Mapped[int] = mapped_column(Integer, default=0)
@@ -322,7 +474,7 @@ class Baseline(Base):
     variance: Mapped[float] = mapped_column(Float, default=0.0)
     samples: Mapped[int] = mapped_column(Integer, default=0)
 
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
 
 class Anomaly(Base):
@@ -340,8 +492,8 @@ class Anomaly(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
 
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ts: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
     metric: Mapped[str] = mapped_column(String(20))
     direction: Mapped[str] = mapped_column(String(10))  # spike | drop
@@ -376,4 +528,4 @@ class AuditLog(Base):
     user_label: Mapped[str] = mapped_column(String(120), default="system")
     action: Mapped[str] = mapped_column(String(60))
     detail: Mapped[str] = mapped_column(Text, default="")
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ts: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)

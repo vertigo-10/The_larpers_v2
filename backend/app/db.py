@@ -63,6 +63,16 @@ _ADDITIVE_COLUMNS = [
     # so they default to "company" here rather than the model's "consumer"
     # default, which only applies to rows created after this column existed.
     ("orgs", "org_type", "VARCHAR(20) NOT NULL DEFAULT 'company'"),
+    # Empty means "nobody can join this org by email domain", which is the only
+    # safe default: turning on domain-based joining for every existing org
+    # would silently widen the way into workspaces whose owners never asked
+    # for it.
+    ("orgs", "email_domain", "VARCHAR(255) NOT NULL DEFAULT ''"),
+    # Everyone who already exists was let in before approval existed, so they
+    # are active. Defaulting to 'pending' would lock every current user out of
+    # their own account on the next deploy.
+    ("users", "status", "VARCHAR(20) NOT NULL DEFAULT 'active'"),
+    ("users", "join_method", "VARCHAR(20) NOT NULL DEFAULT 'founder'"),
 ]
 
 

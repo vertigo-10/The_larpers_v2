@@ -22,7 +22,7 @@
   };
 
   const state = {
-    me: null, members: [], query: "",
+    me: null, members: [], pending: [], invites: [], query: "",
     features: null,
     // Overwritten from the server in init(). The full enum is only the right
     // default for a company, so start from the narrow set and widen.
@@ -34,6 +34,11 @@
   el("ico-notice").innerHTML = icon("users", 15);
   el("ico-add").innerHTML = icon("user", 15);
   el("add-close").innerHTML = icon("x", 14);
+  // These belong to the invites panels, which applyFeatureGates removes
+  // entirely for account types without the feature.
+  if (el("btn-invite")) el("btn-invite").innerHTML = `${icon("key", 11)} New invite`;
+  if (el("ico-invite")) el("ico-invite").innerHTML = icon("key", 15);
+  if (el("invite-close")) el("invite-close").innerHTML = icon("x", 14);
 
   init().catch((err) => {
     if (err && err.status === 401) return;
@@ -75,6 +80,17 @@
     }
 
     await loadTeam();
+    // Both are admin-only server side, so a non-admin is shown nothing rather
+    // than a panel that fails to load.
+    if (isAdmin && api.hasFeature("invites")) {
+      await loadPending();
+      await loadInvites();
+    } else {
+      ["pending-panel", "invites-panel"].forEach((id) => {
+        const panel = el(id);
+        if (panel) panel.style.display = "none";
+      });
+    }
     if (isAdmin && api.hasFeature("audit_log")) await loadAudit();
   }
 
@@ -211,6 +227,210 @@
     });
   }
 
+  // ── the approval queue ──────────────────────────────────────────────────
+  // How somebody arrived is shown, not buried, because the two routes are not
+  // equally trustworthy: an invite is a decision an admin already made about
+  // one named person, and a domain match is an unverified claim about an email
+  // address. The approver is the only thing standing between the two.
+  const JOIN_METHOD = {
+    invite: { label: "Invite code", tone: "ok",
+              note: "Redeemed a code you issued to this address." },
+    domain: { label: "Email domain", tone: "warn",
+              note: "Matched your company domain. Nothing has verified that " +
+                    "they own this address — confirm they are who they say." }
+  };
+
+  async function loadPending() {
+    const panel = el("pending-panel");
+    if (!panel) return;
+    try {
+      state.pending = await api.getPending();
+      renderPending();
+    } catch (err) {
+      if (err && err.status === 401) return;
+      el("pending-body").innerHTML =
+        `<tr><td colspan="6" class="empty-state">${esc(err.message)}</td></tr>`;
+    }
+  }
+
+  function renderPending() {
+    const body = el("pending-body");
+    if (!body) return;
+    const n = state.pending.length;
+    el("pending-pill").textContent = n
+      ? `${n} waiting`
+      : "nobody waiting";
+
+    if (!n) {
+      body.innerHTML = `<tr><td colspan="6" class="empty-state">
+        No one is waiting. Requests appear here when somebody redeems an
+        invite code or signs up on your email domain.
+      </td></tr>`;
+      return;
+    }
+
+    body.innerHTML = state.pending.map((p) => {
+      const how = JOIN_METHOD[p.join_method] ||
+        { label: p.join_method, tone: "", note: "" };
+      const role = ROLES[p.role] || { label: p.role, tone: "" };
+      return `
+        <tr>
+          <td>
+            <div class="flow-cell">
+              <span class="avatar" style="width:26px;height:26px;font-size:10px">${esc(p.initials)}</span>
+              <div>
+                <div class="flow-name">${esc(p.name)}</div>
+                <div class="dim" style="font-size:10px">${esc(p.title || "")}</div>
+              </div>
+            </div>
+          </td>
+          <td class="mono">${esc(p.email)}</td>
+          <td title="${esc(how.note)}">
+            <span class="chip ${esc(how.tone)}">${esc(how.label.toUpperCase())}</span>
+          </td>
+          <td><span class="chip ${esc(role.tone)}">${esc(role.label.toUpperCase())}</span></td>
+          <td title="${esc(fmt.datetime(p.created_at))}">${esc(fmt.ago(new Date(p.created_at).getTime()))}</td>
+          <td>
+            <div class="row-actions">
+              <button class="row-btn" data-approve="${p.id}">APPROVE</button>
+              <button class="row-btn danger" data-reject="${p.id}">REJECT</button>
+            </div>
+          </td>
+        </tr>`;
+    }).join("");
+
+    body.querySelectorAll("[data-approve]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.approve);
+        const person = state.pending.find((p) => p.id === id);
+        // Approving a domain match is the one decision on this page that acts
+        // on an unverified claim, so it is the one that asks twice.
+        if (person.join_method === "domain" && !window.confirm(
+          `Let ${person.name} (${person.email}) into ${state.me.org_name} as ` +
+          `${person.role}?\n\nThey matched your email domain. Nothing has ` +
+          `verified that they own this address.`)) return;
+        btn.disabled = true;
+        try {
+          await api.approveMember(id);
+          toast(`${person.name} can now sign in.`);
+          await refreshAll();
+        } catch (err) {
+          toast(err.message, "err");
+          btn.disabled = false;
+        }
+      });
+    });
+
+    body.querySelectorAll("[data-reject]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.reject);
+        const person = state.pending.find((p) => p.id === id);
+        if (!window.confirm(
+          `Reject ${person.name} (${person.email})?\n\n` +
+          `Their request is deleted. They can ask again, but the invite code ` +
+          `they used is already spent — they would need a new one.`)) return;
+        btn.disabled = true;
+        try {
+          await api.rejectMember(id);
+          toast(`Request from ${person.name} rejected.`);
+          await refreshAll();
+        } catch (err) {
+          toast(err.message, "err");
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  // ── invite codes ────────────────────────────────────────────────────────
+  const INVITE_STATE = {
+    open:    { label: "Open",    tone: "ok" },
+    used:    { label: "Used",    tone: "info" },
+    expired: { label: "Expired", tone: "" },
+    revoked: { label: "Revoked", tone: "bad" }
+  };
+
+  async function loadInvites() {
+    const panel = el("invites-panel");
+    if (!panel) return;
+    try {
+      state.invites = await api.getInvites();
+      renderInvites();
+    } catch (err) {
+      if (err && err.status === 401) return;
+      el("invites-body").innerHTML =
+        `<tr><td colspan="7" class="empty-state">${esc(err.message)}</td></tr>`;
+    }
+  }
+
+  function renderInvites() {
+    const body = el("invites-body");
+    if (!body) return;
+    if (!state.invites.length) {
+      body.innerHTML = `<tr><td colspan="7" class="empty-state">
+        No codes issued yet.
+      </td></tr>`;
+      return;
+    }
+
+    body.innerHTML = state.invites.map((i) => {
+      const st = INVITE_STATE[i.state] || { label: i.state, tone: "" };
+      const role = ROLES[i.role] || { label: i.role, tone: "" };
+      const expires = new Date(i.expires_at).getTime();
+      return `
+        <tr>
+          <td class="mono dim">${esc(i.prefix)}…</td>
+          <td class="mono">${esc(i.invitee_email)}</td>
+          <td><span class="chip ${esc(role.tone)}">${esc(role.label.toUpperCase())}</span></td>
+          <td>
+            <span class="chip ${esc(st.tone)}">${esc(st.label.toUpperCase())}</span>
+            ${i.used_by ? `<span class="dim" style="font-size:10px"> by ${esc(i.used_by)}</span>` : ""}
+          </td>
+          <td title="${esc(fmt.datetime(i.expires_at))}">
+            ${i.state === "open"
+              ? esc(fmt.until(expires))
+              : `<span class="dim">—</span>`}
+          </td>
+          <td>${esc(i.created_by || "—")}</td>
+          <td>
+            <div class="row-actions">
+              ${i.state === "open"
+                ? `<button class="row-btn danger" data-revoke="${i.id}">REVOKE</button>`
+                : `<span class="chip">—</span>`}
+            </div>
+          </td>
+        </tr>`;
+    }).join("");
+
+    body.querySelectorAll("[data-revoke]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.revoke);
+        const inv = state.invites.find((i) => i.id === id);
+        if (!window.confirm(
+          `Revoke the code issued to ${inv.invitee_email}?\n\n` +
+          `It stops working immediately. Anyone already holding it can no ` +
+          `longer use it.`)) return;
+        btn.disabled = true;
+        try {
+          await api.revokeInvite(id);
+          toast("Code revoked.");
+          await refreshAll();
+        } catch (err) {
+          toast(err.message, "err");
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  /** After any decision, every panel on this page can be stale. */
+  async function refreshAll() {
+    await loadTeam();
+    await loadPending();
+    await loadInvites();
+    await loadAudit();
+  }
+
   async function loadAudit() {
     if (state.me.role !== "admin") return;
     if (!api.hasFeature("audit_log")) return;  // panel has been removed
@@ -298,6 +518,80 @@
       btn.textContent = "Add member";
     }
   });
+
+  // ── invite modal ────────────────────────────────────────────────────────
+  // Guarded as a block: applyFeatureGates removes the whole thing for account
+  // types without invites, and there is nothing to wire up in that case.
+  const inviteModal = el("invite-modal");
+  if (inviteModal) {
+    const err = el("invite-err");
+    const fail = (msg) => { err.textContent = msg; err.classList.add("show"); };
+
+    const openInvite = () => {
+      el("i-email").value = "";
+      el("i-expiry").value = "72";
+      el("i-role").innerHTML = state.assignableRoles.map((r) =>
+        `<option value="${esc(r)}">${esc((ROLES[r] || { label: r }).label)} — ${esc((ROLES[r] || {}).note || "")}</option>`
+      ).join("");
+      const preferred = ["viewer", "analyst", "admin"]
+        .find((r) => state.assignableRoles.indexOf(r) !== -1);
+      el("i-role").value = preferred || state.assignableRoles[0];
+
+      // Reset out of the reveal state, so reopening never shows a stale code.
+      el("invite-form").hidden = false;
+      el("invite-result").hidden = true;
+      el("i-code").value = "";
+      el("invite-save").hidden = false;
+      el("invite-cancel").textContent = "Cancel";
+      err.classList.remove("show");
+      inviteModal.classList.add("show");
+      el("i-email").focus();
+    };
+    const closeInvite = () => inviteModal.classList.remove("show");
+
+    el("btn-invite").addEventListener("click", openInvite);
+    el("invite-close").addEventListener("click", closeInvite);
+    el("invite-cancel").addEventListener("click", closeInvite);
+    inviteModal.addEventListener("click", (e) => {
+      if (e.target === inviteModal) closeInvite();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && inviteModal.classList.contains("show")) closeInvite();
+    });
+
+    el("i-code").addEventListener("click", (e) => e.target.select());
+
+    el("invite-save").addEventListener("click", async () => {
+      const data = {
+        email: el("i-email").value.trim(),
+        role: el("i-role").value,
+        expires_in_hours: Number(el("i-expiry").value)
+      };
+      if (!data.email) return fail("Enter the address this code is for.");
+
+      const btn = el("invite-save");
+      btn.disabled = true;
+      btn.textContent = "Creating…";
+      try {
+        const made = await api.createInvite(data);
+        // Swap the form for the code rather than closing: this response is the
+        // only time the code exists in readable form anywhere.
+        el("invite-form").hidden = true;
+        el("invite-result").hidden = false;
+        el("i-code").value = made.code;
+        el("i-code").select();
+        btn.hidden = true;
+        el("invite-cancel").textContent = "Done";
+        err.classList.remove("show");
+        await refreshAll();
+      } catch (e2) {
+        fail(e2.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Create code";
+      }
+    });
+  }
 
   window.SENTRY_ON_SEARCH = function (q) {
     state.query = q;

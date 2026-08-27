@@ -13,14 +13,23 @@ from ..config import settings
 from ..db import get_db
 from ..engine import ensure_org_defaults
 from ..features import assignable_roles, features_for
-from ..models import AuditLog, Org, OrgSettings, OrgType, Role, User
-from ..schemas import ChangePasswordIn, LoginIn, SignupIn, UpdateMeIn, UserOut
+from ..models import AuditLog, Org, OrgSettings, OrgType, Role, User, UserStatus, utcnow
+from ..schemas import (
+    ChangePasswordIn,
+    JoinIn,
+    JoinOut,
+    LoginIn,
+    SignupIn,
+    UpdateMeIn,
+    UserOut,
+)
 from ..security import (
     create_access_token,
     current_user,
     hash_password,
     optional_current_user,
     password_problem,
+    resolve_invite,
     revoke_sessions,
     verify_password,
 )
@@ -101,6 +110,8 @@ def _user_out(user: User) -> UserOut:
         org_type=user.org.org_type if user.org else OrgType.company.value,
         created_at=user.created_at,
         last_login_at=user.last_login_at,
+        status=user.status,
+        join_method=user.join_method,
     )
 
 
@@ -136,6 +147,11 @@ def signup(body: SignupIn, request: Request, response: Response, db: Session = D
         )
 
     org = Org(name=body.org_name.strip(), org_type=body.org_type)
+    # Only a company can be joined, so only a company has a domain to be joined
+    # on. Ignoring the field for a household rather than trusting it means a
+    # crafted consumer signup cannot open a door that account type does not have.
+    if body.org_type == OrgType.company.value:
+        org.email_domain = body.email_domain
     db.add(org)
     db.flush()
 
@@ -145,13 +161,22 @@ def signup(body: SignupIn, request: Request, response: Response, db: Session = D
         password_hash=hash_password(body.password),
         name=body.name.strip(),
         role=Role.admin.value,  # first user owns the org
-        title="Security Operations Lead",
+        title=body.title.strip() or (
+            "Head of the household" if body.org_type == OrgType.consumer.value
+            else "Security Operations Lead"
+        ),
     )
     db.add(user)
     db.add(OrgSettings(org_id=org.id, threshold=settings.default_threshold))
     db.flush()
+    detail = f"Organisation '{org.name}' created"
+    if org.email_domain:
+        # Recorded from the start, so the audit trail can answer "how long has
+        # anyone on this domain been able to request access" without an admin
+        # having to remember whether they set it at signup or later.
+        detail += f", email_domain={org.email_domain}"
     db.add(AuditLog(org_id=org.id, user_id=user.id, user_label=user.name,
-                    action="org.created", detail=f"Organisation '{org.name}' created"))
+                    action="org.created", detail=detail))
     db.commit()
     db.refresh(user)
 
@@ -159,6 +184,127 @@ def signup(body: SignupIn, request: Request, response: Response, db: Session = D
 
     _set_session_cookie(response, create_access_token(user))
     return _user_out(user)
+
+
+# Every way a join can fail says the same thing. The caller is anonymous, and
+# distinguishing "no such org" from "that code is spent" from "wrong address for
+# that code" would let someone map which companies use the product and confirm
+# when a guessed code was real.
+_JOIN_REFUSED = (
+    "We could not match that to an organisation. Check the invite code, or "
+    "ask your administrator for one."
+)
+
+
+@router.post("/join", response_model=JoinOut, status_code=status.HTTP_201_CREATED)
+def join(body: JoinIn, request: Request, db: Session = Depends(get_db)):
+    """Request to join an organisation that already exists.
+
+    Two routes in, both ending in the same place — a pending account with no
+    session. An invite code is an admin's decision about one named person; an
+    email-domain match is only a claim about an address that nothing here
+    verifies. Neither grants access on its own, which is what makes the
+    unverified one safe to offer at all.
+
+    Note what this endpoint deliberately does not do: it never returns a
+    cookie. A pending user holding a token they cannot use is a strictly worse
+    design than not minting one, because it puts the enforcement in a filter
+    somebody can forget to apply rather than in the absence of a credential.
+    """
+    # Same reasoning as signup: an anonymous caller triggering a cost-12 bcrypt
+    # hash and a row insert is a cheap request producing expensive work.
+    join_key = f"join:{request.client.host if request.client else 'unknown'}"
+    blocked, retry_in = _throttled(join_key, settings.signup_max_per_window)
+    if blocked:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Too many attempts. Try again in {retry_in} seconds.",
+        )
+    _record_fail(join_key)
+
+    problem = password_problem(body.password)
+    if problem:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, problem)
+
+    email = body.email.lower().strip()
+    if db.execute(select(User).where(User.email == email)).scalar_one_or_none():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Could not create that account. Try signing in instead.",
+        )
+
+    code = (body.code or "").strip()
+    invite = None
+    if code:
+        invite = resolve_invite(db, code)
+        # The address is checked, not merely recorded: an invite is for one
+        # named person, so a code forwarded to a colleague — or lifted out of a
+        # mailbox — should not work for whoever ends up holding it.
+        if invite is None or invite.invitee_email != email:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, _JOIN_REFUSED)
+        org = db.get(Org, invite.org_id)
+        role, method = invite.role, "invite"
+    else:
+        domain = email.rpartition("@")[2]
+        matches = db.execute(
+            select(Org).where(
+                Org.email_domain == domain,
+                Org.email_domain != "",
+                Org.org_type == OrgType.company.value,
+            )
+        ).scalars().all()
+        # Ambiguity is refused rather than resolved. Two orgs claiming the same
+        # domain and a silent "pick the first" would eventually put somebody in
+        # the wrong company's dashboard, and nobody would be able to see that
+        # it had happened.
+        if len(matches) != 1:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, _JOIN_REFUSED)
+        org = matches[0]
+        # Domain joiners get the least-privileged role available. The admin
+        # raises it at approval if they should have more — an unverified claim
+        # about an email address must not be able to pick its own access level.
+        role, method = Role.viewer.value, "domain"
+
+    if org is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, _JOIN_REFUSED)
+
+    user = User(
+        org_id=org.id,
+        email=email,
+        password_hash=hash_password(body.password),
+        name=body.name.strip(),
+        role=role,
+        title=body.title.strip() or "Security Analyst",
+        status=UserStatus.pending.value,
+        join_method=method,
+    )
+    db.add(user)
+    db.flush()
+
+    if invite is not None:
+        # Consumed at request time, not at approval. If it stayed open until an
+        # admin got round to deciding, the same code would still work for a
+        # second person in the meantime, which is exactly what "single-use" is
+        # supposed to prevent.
+        invite.used_at = utcnow()
+        invite.used_by_id = user.id
+
+    db.add(AuditLog(
+        org_id=org.id, user_id=user.id, user_label=user.name,
+        action="team.join_requested",
+        detail=f"{email} requested to join as {role} via {method}"
+               + (f" ({invite.prefix}…)" if invite is not None else ""),
+    ))
+    db.commit()
+
+    return JoinOut(
+        ok=True,
+        status=UserStatus.pending.value,
+        org_name=org.name,
+        join_method=method,
+        message=f"Your request to join {org.name} has been sent. You will be "
+                "able to sign in once an administrator approves it.",
+    )
 
 
 @router.post("/login", response_model=UserOut)
@@ -184,6 +330,20 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     if not user or not ok or not user.is_active:
         _record_fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
+
+    # Told apart from a wrong password on purpose, and only after the password
+    # has already been verified — so this says nothing to anyone who does not
+    # already hold the credentials. Someone waiting on approval needs to know
+    # that is what is happening; "incorrect email or password" would send them
+    # off resetting a password that works fine.
+    if user.status != UserStatus.active.value:
+        _clear_fails(key)
+        org_name = user.org.name if user.org else "that organisation"
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Your request to join {org_name} is waiting for an administrator "
+            "to approve it.",
+        )
 
     _clear_fails(key)
     user.last_login_at = datetime.now(timezone.utc)

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
-from .models import ApiKey, Role, User, utcnow
+from .models import ApiKey, Invite, Role, User, UserStatus, utcnow
 
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
@@ -119,6 +119,12 @@ def current_user(
     user = db.get(User, int(payload.get("sub", 0)))
     if not user or not user.is_active:
         raise _UNAUTH
+    # Approval is what grants access, so it is enforced on every request rather
+    # than only at login. Login is currently the sole place a token is minted,
+    # but if that ever stops being true — a future magic link, an SSO callback —
+    # the new path inherits this check instead of having to remember it.
+    if user.status != UserStatus.active.value:
+        raise _UNAUTH
     # A token minted before the user was moved between orgs must not keep
     # granting access to the old one.
     if user.org_id != payload.get("org"):
@@ -165,6 +171,54 @@ def generate_api_key() -> Tuple[str, str, str]:
 
 def hash_api_key(full: str) -> str:
     return hashlib.sha256(full.encode()).hexdigest()
+
+
+# ── invite codes ──────────────────────────────────────────────────────────
+# A separate prefix from API_KEY_PREFIX on purpose. Collector keys sit
+# unattended on capture devices and only grant /api/ingest; invite codes create
+# user accounts. Sharing a prefix would make the two impossible to tell apart
+# at a glance, in a log, or in a paste — see the Invite model for the full
+# reasoning.
+INVITE_PREFIX = "sentry_inv_"
+
+
+def generate_invite_code() -> Tuple[str, str, str]:
+    """Mint an invite. Returns (full_secret, prefix, hash).
+
+    Same one-shot contract as generate_api_key: the caller sees the secret
+    once, the database only ever holds its digest, and a lost code is reissued
+    rather than recovered.
+    """
+    raw = secrets.token_urlsafe(24)
+    full = f"{INVITE_PREFIX}{raw}"
+    return full, full[: len(INVITE_PREFIX) + 6], hash_invite_code(full)
+
+
+def hash_invite_code(full: str) -> str:
+    return hashlib.sha256(full.encode()).hexdigest()
+
+
+def resolve_invite(db: Session, presented: str) -> Optional[Invite]:
+    """Look up a *currently usable* invite by its presented code, or None.
+
+    Every reason an invite might not work — wrong code, already used, revoked,
+    expired — collapses to None here so the caller cannot accidentally report
+    them differently. Telling an anonymous caller "that code was already used"
+    instead of "that code is not valid" confirms the code was real, which
+    turns a failed guess into a hit.
+
+    Like resolve_api_key, the lookup is by digest and the final comparison is
+    constant-time.
+    """
+    if not presented or not presented.startswith(INVITE_PREFIX):
+        return None
+    digest = hash_invite_code(presented)
+    row = db.execute(select(Invite).where(Invite.code_hash == digest)).scalar_one_or_none()
+    if row is None or row.state() != "open":
+        return None
+    if not hmac.compare_digest(row.code_hash, digest):
+        return None
+    return row
 
 
 def resolve_api_key(db: Session, presented: str) -> Optional[ApiKey]:

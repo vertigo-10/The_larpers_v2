@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Create organisation — SENTRY NN</title>
+<title>Get started — SENTRY NN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260827" />
 </head>
 <body class="auth">
 <div class="auth-card">
@@ -19,58 +19,120 @@
     </div>
   </div>
 
-  <div class="auth-title">Create your organisation</div>
-  <div class="auth-sub">
-    You'll be the first admin. Everything you monitor stays scoped to this
-    organisation — no other tenant can see it.
+  <div class="auth-title" id="auth-title">What are you protecting?</div>
+  <div class="auth-sub" id="auth-sub">
+    This decides how the whole product reads — which screens you get, what the
+    words on them mean, and who else can be let in.
   </div>
 
-  <!-- method="post" for the same reason as login.html: a native submit must
-       never be able to put the chosen password into a query string. -->
+  <!--
+    method="post" is load-bearing, not decoration. auth.js calls
+    preventDefault() and posts via fetch, so this form should never submit
+    natively — but "should never" is not "cannot". If a script fails to load,
+    throws before it attaches the listener, or the user hits Enter during that
+    window, the browser submits the form itself. With the default method=get
+    that puts the plaintext password in the URL, and from there into browser
+    history, the server access log, and any Referer header.
+  -->
   <form class="auth-form" id="signup-form" method="post" action="signup.html" novalidate>
     <div class="form-error" id="err"></div>
 
-    <div class="field">
-      <label>What are you protecting?</label>
-      <div class="org-type-picker" id="org-type-picker">
-        <button type="button" class="org-type-opt selected" data-org-type="company">
-          <span class="t">A company or team network</span>
-          <span class="d">Multiple sites/nodes, a team with roles, an audit trail.</span>
-        </button>
-        <button type="button" class="org-type-opt" data-org-type="consumer">
-          <span class="t">My home network</span>
-          <span class="d">Your router and devices — simple, single-network setup.</span>
-        </button>
+    <!-- ── step 1: who is this for ─────────────────────────────────── -->
+    <div data-step="choose">
+      <div class="field">
+        <div class="org-type-picker" id="org-type-picker">
+          <button type="button" class="org-type-opt selected" data-choice="company">
+            <span class="t">A company or team network</span>
+            <span class="d">Multiple sites and nodes, a team with roles, an audit trail, tuning you own.</span>
+          </button>
+          <button type="button" class="org-type-opt" data-choice="consumer">
+            <span class="t">My home network</span>
+            <span class="d">Your router and the things on it. Plain language, nothing to configure.</span>
+          </button>
+          <button type="button" class="org-type-opt" data-choice="join">
+            <span class="t">Join a company already using SENTRY</span>
+            <span class="d">Your employer set this up. You'll need their invite code, or a work email on their domain.</span>
+          </button>
+        </div>
       </div>
-      <input type="hidden" id="org_type" name="org_type" value="company" />
+      <button type="button" class="auth-btn" id="btn-choose">Continue</button>
     </div>
 
-    <div class="field">
-      <label for="org_name" id="org_name-label">Organisation name</label>
-      <input type="text" id="org_name" name="org_name" required
-             maxlength="120" placeholder="Acme Networks" />
+    <!-- ── step 2a: household, one step ────────────────────────────── -->
+    <div data-step="consumer" hidden>
+      <div class="field">
+        <label for="org_name_consumer">Household name</label>
+        <input type="text" id="org_name_consumer" maxlength="120" placeholder="The Mekat House" />
+        <span class="hint">Only ever shown to people in your household.</span>
+      </div>
+      <div class="field">
+        <label for="name_consumer">Your name</label>
+        <input type="text" id="name_consumer" autocomplete="name" maxlength="120" placeholder="Jane Mercer" />
+      </div>
+      <div class="field">
+        <label for="email_consumer">Email</label>
+        <input type="email" id="email_consumer" autocomplete="username" placeholder="you@example.com" />
+      </div>
+      <div class="field">
+        <label for="password_consumer">Password</label>
+        <input type="password" id="password_consumer" autocomplete="new-password" placeholder="••••••••••••" />
+        <span class="hint" data-pw-hint>At least 12 characters. Length beats symbols.</span>
+      </div>
+      <button type="submit" class="auth-btn" data-submit>Create household</button>
+      <button type="button" class="auth-back" data-back>Back</button>
     </div>
 
-    <div class="field">
-      <label for="name">Your name</label>
-      <input type="text" id="name" name="name" autocomplete="name" required
-             maxlength="120" placeholder="Jane Mercer" />
+    <!-- ── step 2b: company, part one of two ───────────────────────── -->
+    <div data-step="company-1" hidden>
+      <div class="step-dots"><i class="on"></i><i></i></div>
+      <div class="field">
+        <label for="name_company">Your full name</label>
+        <input type="text" id="name_company" autocomplete="name" maxlength="120" placeholder="Jane Mercer" />
+      </div>
+      <div class="field">
+        <label for="email_company">Work email</label>
+        <input type="email" id="email_company" autocomplete="username" placeholder="you@company.com" />
+        <span class="hint">Used to sign in, and shown to your colleagues in the team list.</span>
+      </div>
+      <div class="field">
+        <label for="password_company">Password</label>
+        <input type="password" id="password_company" autocomplete="new-password" placeholder="••••••••••••" />
+        <span class="hint" data-pw-hint>At least 12 characters. Length beats symbols.</span>
+      </div>
+      <button type="button" class="auth-btn" id="btn-company-next">Continue</button>
+      <button type="button" class="auth-back" data-back>Back</button>
     </div>
 
-    <div class="field">
-      <label for="email">Work email</label>
-      <input type="email" id="email" name="email" autocomplete="username"
-             required placeholder="you@company.com" />
+    <!-- ── step 2c: company, part two of two ───────────────────────── -->
+    <div data-step="company-2" hidden>
+      <div class="step-dots"><i class="done"></i><i class="on"></i></div>
+      <div class="field">
+        <label for="org_name_company">Organisation name</label>
+        <input type="text" id="org_name_company" maxlength="120" placeholder="Acme Networks" />
+        <span class="hint">Appears on reports and in the audit trail.</span>
+      </div>
+      <div class="field">
+        <label for="title_company">Your job title</label>
+        <input type="text" id="title_company" maxlength="120" placeholder="Security Operations Lead" />
+        <span class="hint">
+          Shown next to your name in the team list, so colleagues know who to
+          escalate an incident to. Optional.
+        </span>
+      </div>
+      <div class="field">
+        <label for="email_domain_company">Company email domain <span class="opt">optional</span></label>
+        <input type="text" id="email_domain_company" maxlength="255" placeholder="acme.com" />
+        <span class="hint">
+          Lets colleagues on this domain request access without you issuing a
+          code each time. They still land in a queue for you to approve —
+          nothing here verifies that someone owns the address they typed, so a
+          domain match is a hint, never a key. Leave blank to require an invite
+          for everyone.
+        </span>
+      </div>
+      <button type="submit" class="auth-btn" data-submit>Create organisation</button>
+      <button type="button" class="auth-back" data-back>Back</button>
     </div>
-
-    <div class="field">
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password"
-             autocomplete="new-password" required placeholder="••••••••••••" />
-      <span class="hint" id="pw-hint">At least 12 characters. Length beats symbols.</span>
-    </div>
-
-    <button type="submit" class="auth-btn" id="submit">Create organisation</button>
   </form>
 
   <div class="auth-alt">
@@ -78,9 +140,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js?v=20260826"></script>
-<script src="assets/js/api.js?v=20260826"></script>
-<script src="assets/js/ui.js?v=20260826"></script>
-<script src="assets/js/auth.js?v=20260826"></script>
+<script src="assets/js/config.js?v=20260827"></script>
+<script src="assets/js/api.js?v=20260827"></script>
+<script src="assets/js/ui.js?v=20260827"></script>
+<script src="assets/js/auth.js?v=20260827"></script>
 </body>
 </html>

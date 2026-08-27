@@ -22,7 +22,7 @@
     features: null
   };
 
-  const AUTH_PAGES = ["/login.html", "/signup.html"];
+  const AUTH_PAGES = ["/login.html", "/signup.html", "/join.html"];
   const onAuthPage = () => AUTH_PAGES.some((p) => window.location.pathname.endsWith(p));
 
   function url(path) {
@@ -78,8 +78,13 @@
     if (!res.ok) {
       const detail =
         (body && body.detail) || (typeof body === "string" ? body : `HTTP ${res.status}`);
+      // Pydantic prefixes anything raised by a field validator with
+      // "Value error, ". Our validators are written as sentences meant for the
+      // person filling the form, so the prefix is pure noise on screen.
       const message = Array.isArray(detail)
-        ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+        ? detail
+            .map((d) => (d.msg || JSON.stringify(d)).replace(/^Value error,\s*/, ""))
+            .join("; ")
         : detail;
       throw new ApiError(message, res.status, body);
     }
@@ -98,6 +103,14 @@
 
     // ── auth ────────────────────────────────────────────────────────────
     signup: (data) => post("/api/auth/signup", data),
+    /**
+     * Ask to join an org that already exists.
+     *
+     * Unlike signup and login this returns no session — the response is a
+     * pending-status object, and the caller must show it rather than redirect
+     * into a dashboard the account cannot open yet.
+     */
+    join: (data) => post("/api/auth/join", data),
     login: (data) => post("/api/auth/login", data),
     logout: () => post("/api/auth/logout"),
     changePassword: (data) => post("/api/auth/password", data),
@@ -188,6 +201,17 @@
     updateMember: (id, data) => patch(`/api/team/${id}`, data),
     removeMember: (id) => del(`/api/team/${id}`),
     getAudit: (limit = 100) => get(`/api/team/audit?limit=${limit}`),
+
+    // ── invites + the approval queue ────────────────────────────────────
+    // createInvite is the only call that returns a usable code, and only in
+    // its response — like a collector key, it is stored hashed and the listing
+    // can show nothing but the prefix.
+    getInvites: () => get("/api/team/invites"),
+    createInvite: (data) => post("/api/team/invites", data),
+    revokeInvite: (id) => del(`/api/team/invites/${id}`),
+    getPending: () => get("/api/team/pending"),
+    approveMember: (id) => post(`/api/team/${id}/approve`),
+    rejectMember: (id) => post(`/api/team/${id}/reject`),
 
     // ── collector keys ──────────────────────────────────────────────────
     // createKey is the only call that ever returns a usable secret, and only

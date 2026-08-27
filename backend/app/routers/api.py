@@ -20,6 +20,7 @@ from ..db import get_db
 from ..engine import (
     BENIGN, manager, process_flows, record_metric_point, severity_for,
 )
+from ..features import has_feature
 from ..ml.infer import get_detector
 from ..models import (
     Anomaly,
@@ -867,6 +868,7 @@ def get_settings(db: Session = Depends(get_db), user: User = Depends(current_use
         min_severity=cfg.min_severity, poll_interval_ms=cfg.poll_interval_ms,
         max_table_rows=cfg.max_table_rows,
         org_name=user.org.name if user.org else "",
+        email_domain=user.org.email_domain if user.org else "",
     )
 
 
@@ -887,6 +889,23 @@ def update_settings(
     if body.org_name and user.org:
         user.org.name = body.org_name.strip()
         changed.append("org_name")
+    # Checked against "is not None" rather than truthiness, because "" is a
+    # meaningful value here: it is how an admin turns domain-based joining back
+    # off. Treating it as "unset" would make that switch one-way.
+    if body.email_domain is not None and user.org:
+        if not has_feature(user.org.org_type, "invites"):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "'invites' is not available for this account type.",
+            )
+        if user.org.email_domain != body.email_domain:
+            user.org.email_domain = body.email_domain
+            # Named in the audit trail rather than logged as a generic
+            # "settings.updated", because widening the way into a workspace is
+            # not the same class of change as moving a confidence threshold.
+            changed.append(
+                f"email_domain={body.email_domain or '(disabled)'}"
+            )
 
     if changed:
         db.add(AuditLog(org_id=user.org_id, user_id=user.id, user_label=user.name,
@@ -899,6 +918,7 @@ def update_settings(
         min_severity=cfg.min_severity, poll_interval_ms=cfg.poll_interval_ms,
         max_table_rows=cfg.max_table_rows,
         org_name=user.org.name if user.org else "",
+        email_domain=user.org.email_domain if user.org else "",
     )
 
 

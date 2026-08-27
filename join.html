@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Join your team — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260827" />
+</head>
+<body class="auth">
+<div class="auth-card">
+  <div class="auth-brand">
+    <div class="brand-mark" id="brand-mark"></div>
+    <div>
+      <div class="brand-name">SENTRY<span>NN</span></div>
+      <div class="brand-sub">Threat Detection</div>
+    </div>
+  </div>
+
+  <div class="auth-title" id="auth-title">Join your team</div>
+  <div class="auth-sub" id="auth-sub">
+    For people whose organisation already uses SENTRY. This does not create a
+    new organisation, and it does not sign you in — an administrator has to let
+    you in first.
+  </div>
+
+  <!-- Same reasoning as login.html: preventDefault() should stop this form
+       ever submitting natively, but if the script fails to load, a default
+       method=get would put the password in the URL. -->
+  <form class="auth-form" id="join-form" method="post" action="join.html" novalidate>
+    <div class="form-error" id="err"></div>
+
+    <div class="field">
+      <label for="join_name">Your full name</label>
+      <input type="text" id="join_name" autocomplete="name" maxlength="120" placeholder="Jane Mercer" />
+    </div>
+
+    <div class="field">
+      <label for="join_email">Work email</label>
+      <input type="email" id="join_email" autocomplete="username" placeholder="you@company.com" />
+      <span class="hint">
+        Use the address your employer knows you by. If they have registered
+        their email domain, this is all you need.
+      </span>
+    </div>
+
+    <div class="field">
+      <label for="join_code">Invite code <span class="opt">optional</span></label>
+      <input type="text" id="join_code" maxlength="200" spellcheck="false"
+             autocomplete="off" placeholder="sentry_inv_…" />
+      <span class="hint">
+        If an administrator sent you a code, paste it here. Codes work once,
+        and only for the address they were issued to.
+      </span>
+    </div>
+
+    <div class="field">
+      <label for="join_title">Your job title <span class="opt">optional</span></label>
+      <input type="text" id="join_title" maxlength="120" placeholder="Security Analyst" />
+    </div>
+
+    <div class="field">
+      <label for="join_password">Choose a password</label>
+      <input type="password" id="join_password" autocomplete="new-password" placeholder="••••••••••••" />
+      <span class="hint" data-pw-hint>At least 12 characters. Length beats symbols.</span>
+    </div>
+
+    <button type="submit" class="auth-btn" id="submit">Request access</button>
+  </form>
+
+  <div class="auth-alt" id="alt">
+    Setting up a new organisation instead? <a href="signup.html">Start here</a>
+  </div>
+</div>
+
+<script src="assets/js/config.js?v=20260827"></script>
+<script src="assets/js/api.js?v=20260827"></script>
+<script src="assets/js/ui.js?v=20260827"></script>
+<script src="assets/js/auth.js?v=20260827"></script>
+</body>
+</html>

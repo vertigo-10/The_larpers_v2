@@ -19,7 +19,13 @@
   const { esc, icon, fmt, toast } = ui;
   const el = (id) => document.getElementById(id);
 
-  const SHARED = ["in-org", "in-threshold", "in-auto", "in-severity", "in-webhook", "in-notify"];
+  // `in-domain` is only present for account types with the invites feature —
+  // applyFeatureGates removes it outright otherwise — so every reference to it
+  // has to tolerate a missing node.
+  const SHARED = [
+    "in-org", "in-domain", "in-threshold", "in-auto", "in-severity",
+    "in-webhook", "in-notify"
+  ];
 
   const state = { user: null, server: null, dirty: false };
 
@@ -38,6 +44,8 @@
     el("topbar-avatar").title = `${state.user.name} · ${state.user.role}`;
     el("crumb").textContent = `/ ${state.user.org_name}`;
     el("role-pill").textContent = state.user.role.toUpperCase();
+
+    applyOrgWording();
 
     state.server = await api.getSettings();
     paintServer(state.server);
@@ -61,6 +69,8 @@
 
   function paintServer(s) {
     el("in-org").value = s.org_name || "";
+    const domain = el("in-domain");
+    if (domain) domain.value = s.email_domain || "";
     el("in-threshold").value = Math.round(s.threshold * 100);
     el("threshold-label").textContent = s.threshold.toFixed(2);
     el("in-auto").checked = s.auto_mitigate;
@@ -98,6 +108,17 @@
       node.appendChild(opt);
       node.value = String(value);
     }
+  }
+
+  // The shared section is the one place this page names the group the settings
+  // belong to, and "organisation" is wrong for a household in a way that reads
+  // as the wrong product rather than as a typo.
+  function applyOrgWording() {
+    const copy = ui.orgCopy(state.user.org_type);
+    el("org-panel-title").textContent = copy.settingsTitle;
+    el("org-name-label").textContent = copy.settingsNameLabel;
+    el("org-name-desc").textContent = copy.settingsNameDesc;
+    el("scope-text").innerHTML = copy.settingsScope;
   }
 
   function applyRole() {
@@ -167,6 +188,11 @@
         webhook_url: el("in-webhook").value.trim(),
         notify_browser: el("in-notify").checked
       };
+      // Omitted rather than sent as "" when the field is absent: "" is how an
+      // admin turns domain joining off, so sending it unconditionally would
+      // clear the setting every time a consumer saved anything.
+      const domain = el("in-domain");
+      if (domain) payload.email_domain = domain.value.trim();
       try {
         state.server = await api.updateSettings(payload);
         paintServer(state.server);

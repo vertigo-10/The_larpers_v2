@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260827" />
 </head>
 <body>
 <div class="app">
@@ -34,6 +34,32 @@
         </span>
       </div>
 
+      <!-- People who asked to join and are waiting on a decision. Kept above
+           Members because it is the only panel on this page that represents
+           an outstanding action. -->
+      <section class="panel" id="pending-panel" data-requires-feature="invites"
+               style="margin-bottom:14px">
+        <div class="panel-head">
+          <span class="panel-title">Waiting for approval</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="pending-pill">—</span></div>
+        </div>
+        <div class="table-scroll" style="max-height:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th>Email</th>
+                <th>How they got here</th>
+                <th>Role they would get</th>
+                <th>Asked</th>
+                <th style="text-align:right">Decision</th>
+              </tr>
+            </thead>
+            <tbody id="pending-body"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="panel" style="margin-bottom:14px">
         <div class="panel-head">
           <span class="panel-title">Members</span>
@@ -54,6 +80,39 @@
             </thead>
             <tbody id="team-body"></tbody>
           </table>
+        </div>
+      </section>
+
+      <section class="panel" id="invites-panel" data-requires-feature="invites"
+               style="margin-bottom:14px">
+        <div class="panel-head">
+          <span class="panel-title">Invite codes</span>
+          <div class="right">
+            <button class="pill" id="btn-invite" style="height:24px;font-size:10.5px"></button>
+          </div>
+        </div>
+        <div class="table-scroll" style="max-height:360px">
+          <table>
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Issued to</th>
+                <th>Role</th>
+                <th>State</th>
+                <th>Expires</th>
+                <th>Issued by</th>
+                <th style="text-align:right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="invites-body"></tbody>
+          </table>
+        </div>
+        <div class="section-note">
+          A code works once, and only for the address it was issued to. It is
+          shown to you once when created and stored hashed afterwards, so it
+          cannot be read back here — reissue it if it gets lost. Redeeming a
+          code still puts the person in the queue above; the code decides which
+          role they would get, not whether they get in.
         </div>
       </section>
 
@@ -123,9 +182,68 @@
   </div>
 </div>
 
-<script src="assets/js/config.js?v=20260826"></script>
-<script src="assets/js/api.js?v=20260826"></script>
-<script src="assets/js/ui.js?v=20260826"></script>
-<script src="assets/js/team.js?v=20260826"></script>
+<!-- issue an invite -->
+<div class="modal-back" id="invite-modal" data-requires-feature="invites">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="ico-invite"></span>
+      <span class="t">Issue an invite code</span>
+      <button class="x" id="invite-close"></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-error" id="invite-err"></div>
+
+      <div id="invite-form">
+        <div class="field">
+          <label for="i-email">Their work email</label>
+          <input type="email" id="i-email" placeholder="alex@company.com" />
+          <span class="hint">
+            The code will only work for this exact address, so a forwarded
+            copy is useless to anyone else.
+          </span>
+        </div>
+        <div class="field">
+          <label for="i-role">Role once you approve them</label>
+          <select id="i-role" class="sel-input" style="min-width:0"></select>
+        </div>
+        <div class="field">
+          <label for="i-expiry">Valid for</label>
+          <select id="i-expiry" class="sel-input" style="min-width:0">
+            <option value="24">24 hours</option>
+            <option value="72" selected>3 days</option>
+            <option value="168">7 days</option>
+            <option value="336">14 days — the maximum</option>
+          </select>
+          <span class="hint">
+            A code that still works months later is a standing password to a
+            security dashboard sitting in somebody's inbox.
+          </span>
+        </div>
+      </div>
+
+      <!-- The one and only time the code is visible. -->
+      <div id="invite-result" hidden>
+        <div class="field">
+          <label>Send them this code</label>
+          <input type="text" id="i-code" readonly class="mono" />
+          <span class="hint">
+            Copy it now. It is stored hashed, so this dialog is the only place
+            it will ever appear. Send it over something you trust — anyone
+            holding it can file a join request as that address.
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="invite-cancel">Cancel</button>
+      <button class="btn btn-primary" id="invite-save">Create code</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/config.js?v=20260827"></script>
+<script src="assets/js/api.js?v=20260827"></script>
+<script src="assets/js/ui.js?v=20260827"></script>
+<script src="assets/js/team.js?v=20260827"></script>
 </body>
 </html>

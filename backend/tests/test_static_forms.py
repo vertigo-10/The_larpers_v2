@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CREDENTIAL_FORMS = [
     ("login.html", "login-form"),
     ("signup.html", "signup-form"),
+    ("join.html", "join-form"),
 ]
 
 

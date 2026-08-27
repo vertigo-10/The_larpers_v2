@@ -10,6 +10,42 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
+# Not exhaustive and not meant to be — it catches the providers an admin might
+# plausibly type by mistake. The real guarantee is that a domain match only
+# produces a pending request, never access.
+_PUBLIC_EMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com",
+    "live.com", "msn.com", "aol.com", "icloud.com", "me.com", "mac.com",
+    "proton.me", "protonmail.com", "gmx.com", "mail.com", "zoho.com",
+    "yandex.com", "fastmail.com", "tutanota.com", "hey.com",
+})
+
+
+def normalise_email_domain(v: str) -> str:
+    """Shared by signup and settings, which are two doors onto one decision.
+
+    Two copies of this would drift, and the direction it drifts is the one
+    that matters: whichever door forgot the public-provider rule becomes the
+    way to point an org at gmail.com.
+    """
+    v = v.strip().lower().lstrip("@")
+    if not v:
+        return ""  # explicit opt-out: turns domain joining back off
+    if "/" in v or " " in v or "@" in v or "." not in v:
+        raise ValueError("Enter a bare domain, like acme.com")
+    # A public mailbox provider here would turn "anyone at our company" into
+    # "anyone at all" — every Gmail address on earth could file a join request
+    # against this org. Approval would still be required, but the request queue
+    # is itself a target, and an admin clicking through a hundred lookalikes
+    # will eventually approve the wrong one.
+    if v in _PUBLIC_EMAIL_DOMAINS:
+        raise ValueError(
+            f"'{v}' is a public email provider, so anyone could request to "
+            "join. Use a domain your organisation controls."
+        )
+    return v
+
+
 # ── auth ──────────────────────────────────────────────────────────────────
 class SignupIn(BaseModel):
     email: EmailStr
@@ -20,6 +56,14 @@ class SignupIn(BaseModel):
     # rather than defaulted so a signing-up user makes the choice once, on
     # purpose, instead of it being silently assumed.
     org_type: str = Field(pattern="^(company|consumer)$")
+    # Collected by the company signup, which asks what you do; the household
+    # form does not, because "job title" is a strange question to ask someone
+    # about their own flat. Blank falls back to a per-org-type default.
+    title: str = Field(default="", max_length=120)
+    # Set here rather than left to a follow-up settings call, so a rejected
+    # domain fails the whole signup instead of leaving a live account whose
+    # owner believes they configured something they did not.
+    email_domain: str = Field(default="", max_length=255)
 
     @field_validator("name", "org_name")
     @classmethod
@@ -29,10 +73,54 @@ class SignupIn(BaseModel):
             raise ValueError("cannot be blank")
         return v
 
+    @field_validator("email_domain")
+    @classmethod
+    def _domain(cls, v: str) -> str:
+        return normalise_email_domain(v)
+
 
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class JoinIn(BaseModel):
+    """Request to join an org that already exists, rather than creating one.
+
+    `code` is optional because there are two routes in: an invite an admin
+    issued for you specifically, or a match on the org's email domain. The
+    server decides which applies — the client cannot pick, and a domain match
+    never confers more than an invite would.
+    """
+
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=200)
+    name: str = Field(min_length=1, max_length=120)
+    title: str = Field(default="", max_length=120)
+    code: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("cannot be blank")
+        return v
+
+
+class JoinOut(BaseModel):
+    """The result of a join request. Carries no session.
+
+    A pending account gets no cookie and no token: approval is what grants
+    access, so handing out a session here and filtering it later would make
+    the wrong thing the default.
+    """
+
+    ok: bool
+    status: str
+    org_name: str
+    join_method: str
+    message: str
 
 
 class UserOut(BaseModel):
@@ -48,6 +136,13 @@ class UserOut(BaseModel):
     org_type: str
     created_at: datetime
     last_login_at: Optional[datetime] = None
+    # "pending" means they asked to join and no admin has decided yet. Distinct
+    # from is_active, which means an admin turned an existing account off.
+    status: str = "active"
+    # founder | invite | domain — how this person got in. The approval screen
+    # shows it, because a domain match is an unverified claim about an email
+    # address and an invite is a decision somebody actually made.
+    join_method: str = "founder"
 
 
 class InviteIn(BaseModel):
@@ -148,6 +243,9 @@ class SettingsOut(BaseModel):
     poll_interval_ms: int
     max_table_rows: int
     org_name: str
+    # Empty means nobody can request to join by email domain, and an invite is
+    # the only route in.
+    email_domain: str = ""
 
 
 class SettingsIn(BaseModel):
@@ -159,6 +257,16 @@ class SettingsIn(BaseModel):
     poll_interval_ms: Optional[int] = Field(default=None, ge=250, le=60000)
     max_table_rows: Optional[int] = Field(default=None, ge=5, le=500)
     org_name: Optional[str] = Field(default=None, max_length=120)
+    email_domain: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("email_domain")
+    @classmethod
+    def _real_domain(cls, v: Optional[str]) -> Optional[str]:
+        # None means "not in this PATCH" and must stay distinct from "", which
+        # is how an admin switches domain joining back off.
+        if v is None:
+            return v
+        return normalise_email_domain(v)
 
     @field_validator("webhook_url")
     @classmethod
@@ -200,6 +308,42 @@ class ApiKeyCreatedOut(ApiKeyOut):
     """
 
     key: str
+
+
+# ── invites ───────────────────────────────────────────────────────────────
+class InviteCreateIn(BaseModel):
+    """Issue one invite for one person.
+
+    `expires_in_hours` is capped at a fortnight rather than left open. An
+    invite is a decision an admin made about one person at one moment; a code
+    that still works months later is a standing password to a security
+    dashboard sitting in somebody's inbox.
+    """
+
+    email: EmailStr
+    role: str = Field(pattern="^(admin|analyst|viewer)$")
+    expires_in_hours: int = Field(default=72, ge=1, le=336)
+
+
+class InviteOut(BaseModel):
+    """An invite as listed. Like ApiKeyOut, deliberately carries no secret."""
+
+    id: int
+    prefix: str
+    invitee_email: str
+    role: str
+    state: str  # open | used | expired | revoked
+    created_at: datetime
+    created_by: str
+    expires_at: datetime
+    used_at: Optional[datetime] = None
+    used_by: Optional[str] = None
+
+
+class InviteCreatedOut(InviteOut):
+    """Returned only from the create call — the one time the code is visible."""
+
+    code: str
 
 
 # ── misc ──────────────────────────────────────────────────────────────────
