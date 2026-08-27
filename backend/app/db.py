@@ -58,6 +58,11 @@ def get_db() -> Generator[Session, None, None]:
 # should be a real migration.
 _ADDITIVE_COLUMNS = [
     ("users", "token_version", "INTEGER NOT NULL DEFAULT 0"),
+    # Existing orgs predate the company/consumer distinction and were already
+    # seeded with the enterprise-style demo topology (EDGE-01, DC-LB-01, ...),
+    # so they default to "company" here rather than the model's "consumer"
+    # default, which only applies to rows created after this column existed.
+    ("orgs", "org_type", "VARCHAR(20) NOT NULL DEFAULT 'company'"),
 ]
 
 

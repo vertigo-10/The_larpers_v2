@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
 </head>
 <body>
 <div class="app">
@@ -15,8 +15,8 @@
 
   <div class="main">
     <header class="topbar">
-      <h1>Network Nodes</h1>
-      <span class="crumb">/ monitored links</span>
+      <h1 id="page-title">Network Nodes</h1>
+      <span class="crumb" id="crumb">/ monitored links</span>
       <div class="topbar-right">
         <button class="pill" id="btn-refresh"></button>
         <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
@@ -26,7 +26,7 @@
     <div class="content">
       <div class="notice">
         <span id="ico-notice"></span>
-        <span>
+        <span id="notice-text">
           Nodes are the collection points flows are attributed to. Throughput and
           attack counts cover the last five minutes. A node turns amber once more
           than eight flagged flows arrive from it in that window.
@@ -62,9 +62,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js"></script>
-<script src="assets/js/api.js"></script>
-<script src="assets/js/ui.js"></script>
-<script src="assets/js/nodes.js"></script>
+<script src="assets/js/config.js?v=20260826"></script>
+<script src="assets/js/api.js?v=20260826"></script>
+<script src="assets/js/ui.js?v=20260826"></script>
+<script src="assets/js/nodes.js?v=20260826"></script>
 </body>
 </html>

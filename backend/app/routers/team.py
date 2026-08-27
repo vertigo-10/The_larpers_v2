@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import ApiKey, AuditLog, Role, User, utcnow
+from ..features import assignable_roles, has_feature, require_feature
+from ..models import ApiKey, AuditLog, OrgType, Role, User, utcnow
 from ..schemas import (
     ApiKeyCreatedOut,
     ApiKeyCreateIn,
@@ -32,8 +33,9 @@ def _out(u: User) -> UserOut:
     return UserOut(
         id=u.id, email=u.email, name=u.name, role=u.role, title=u.title,
         initials=u.initials, is_active=u.is_active, org_id=u.org_id,
-        org_name=u.org.name if u.org else "", created_at=u.created_at,
-        last_login_at=u.last_login_at,
+        org_name=u.org.name if u.org else "",
+        org_type=u.org.org_type if u.org else OrgType.company.value,
+        created_at=u.created_at, last_login_at=u.last_login_at,
     )
 
 
@@ -61,6 +63,18 @@ def add_member(
     problem = password_problem(body.password)
     if problem:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, problem)
+
+    # A household gets admin/viewer, not the three-tier analyst scheme, which
+    # only means something with a security rota behind it. Enforced here and
+    # not only in the role dropdown, because the dropdown is a suggestion.
+    org_type = admin.org.org_type if admin.org else OrgType.company.value
+    allowed = assignable_roles(org_type)
+    if body.role not in allowed:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Role '{body.role}' is not available for this account type. "
+            f"Choose one of: {', '.join(allowed)}.",
+        )
 
     email = body.email.lower().strip()
     if db.execute(select(User).where(User.email == email)).scalar_one_or_none():
@@ -94,6 +108,15 @@ def update_member(
     member = db.get(User, user_id)
     if not member or member.org_id != admin.org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such team member.")
+
+    org_type = admin.org.org_type if admin.org else OrgType.company.value
+    allowed = assignable_roles(org_type)
+    if body.role is not None and body.role not in allowed:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Role '{body.role}' is not available for this account type. "
+            f"Choose one of: {', '.join(allowed)}.",
+        )
 
     # Guard against an org locking itself out of admin access entirely.
     if member.id == admin.id and body.role and body.role != Role.admin.value:
@@ -181,6 +204,23 @@ def create_key(
     admin: User = Depends(require_admin),
 ):
     """Mint a collector key. The secret is shown here and never again."""
+    # A household runs one collector. Capping it at one active key keeps the
+    # page honest — "this is the key your device uses" rather than a credential
+    # inventory — and means a forgotten second key cannot sit around unnoticed.
+    org_type = admin.org.org_type if admin.org else OrgType.company.value
+    if not has_feature(org_type, "multiple_api_keys"):
+        active = db.execute(
+            select(ApiKey).where(
+                ApiKey.org_id == admin.org_id, ApiKey.revoked_at.is_(None)
+            )
+        ).scalars().all()
+        if active:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "This account type uses a single collector key. Revoke the "
+                "existing one first.",
+            )
+
     full, prefix, digest = generate_api_key()
     key = ApiKey(
         org_id=admin.org_id, label=body.label.strip() or "collector",
@@ -224,7 +264,15 @@ def audit_log(
     limit: int = 100,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
+    _: User = Depends(require_feature("audit_log")),
 ):
+    """Admin-only, and company-only.
+
+    Entries are still *written* for consumer orgs — they are how an incident
+    gets reconstructed after the fact, and that matters regardless of account
+    type. Only the reporting surface is gated, so nothing is lost by switching
+    a household to a company later.
+    """
     rows = db.execute(
         select(AuditLog).where(AuditLog.org_id == admin.org_id)
         .order_by(AuditLog.ts.desc()).limit(min(limit, 500))

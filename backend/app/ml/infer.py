@@ -51,7 +51,16 @@ class Detector:
                 )
 
             net = Net()
-            net.load_state_dict(torch.load(model_path, map_location="cpu"))
+            # weights_only=True keeps the load restricted to plain tensors.
+            # The default unpickles arbitrary objects, which means a swapped
+            # model.pt is remote code execution rather than a bad prediction —
+            # and the model file is exactly the artifact most likely to be
+            # fetched from a build cache, a release asset or a teammate.
+            # It became the torch default in 2.6; passing it explicitly keeps
+            # the guarantee on the older versions this still supports.
+            net.load_state_dict(
+                torch.load(model_path, map_location="cpu", weights_only=True)
+            )
             net.eval()
 
             self.net = net

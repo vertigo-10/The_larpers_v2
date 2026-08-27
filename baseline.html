@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Baseline &amp; Anomalies — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Baseline &amp; Anomalies</h1>
+      <span class="crumb" id="crumb">/ what is normal here</span>
+      <div class="topbar-right">
+        <select class="sel-input" id="in-metric" style="height:30px">
+          <option value="flows" selected>Flow rate</option>
+          <option value="bytes">Traffic volume</option>
+          <option value="sources">Unique sources</option>
+        </select>
+        <button class="pill" id="btn-refresh"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="notice">
+        <span id="ico-notice"></span>
+        <span>
+          The model judges each flow on its own shape, so it cannot see an attack
+          that is only visible in aggregate — a botnet whose every request looks
+          ordinary, or a link that falls silent. This page asks the other question:
+          <b>is this normal for this network, at this hour, on this kind of day</b>.
+          It compares against what it has learned here, not a fixed threshold,
+          which is why a busy Monday morning does not read as an attack.
+        </span>
+      </div>
+
+      <div id="warmup-notice"></div>
+
+      <div class="stat-strip" id="stat-strip"></div>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-head">
+          <span class="panel-title">Open anomalies</span>
+          <div class="right">
+            <button class="btn btn-sm" data-status="open">Open</button>
+            <button class="btn btn-sm" data-status="acknowledged">Acknowledged</button>
+            <button class="btn btn-sm" data-status="resolved">Resolved</button>
+            <button class="btn btn-sm" data-status="all">All</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Signal</th>
+                <th>Severity</th>
+                <th>Observed</th>
+                <th>Expected</th>
+                <th>Deviation</th>
+                <th>Duration</th>
+                <th>Started</th>
+                <th>Last seen</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="anomaly-body"></tbody>
+          </table>
+        </div>
+        <div class="section-note" id="anomaly-note" style="padding:10px 14px"></div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-head">
+          <span class="panel-title" id="profile-title">Learned profile</span>
+          <div class="right">
+            <span class="pill" style="height:24px;font-size:10.5px" id="profile-pill">weekday</span>
+            <button class="btn btn-sm" data-day="0">Weekday</button>
+            <button class="btn btn-sm" data-day="1">Weekend</button>
+          </div>
+        </div>
+        <div style="height:260px;padding:12px 14px">
+          <canvas id="profileChart"></canvas>
+        </div>
+        <div class="section-note" id="profile-note" style="padding:0 14px 12px"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/js/config.js?v=20260826"></script>
+<script src="assets/js/api.js?v=20260826"></script>
+<script src="assets/js/ui.js?v=20260826"></script>
+<script src="assets/js/baseline.js?v=20260826"></script>
+</body>
+</html>

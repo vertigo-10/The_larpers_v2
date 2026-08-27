@@ -21,7 +21,13 @@
     viewer:  { label: "Viewer",  tone: "",     note: "read only" }
   };
 
-  const state = { me: null, members: [], query: "" };
+  const state = {
+    me: null, members: [], query: "",
+    features: null,
+    // Overwritten from the server in init(). The full enum is only the right
+    // default for a company, so start from the narrow set and widen.
+    assignableRoles: ["admin", "viewer"]
+  };
 
   ui.mountSidebar("team");
   el("btn-add").innerHTML = `${icon("plus", 12)} Add member`;
@@ -36,18 +42,40 @@
 
   async function init() {
     state.me = await api.me();
+    // Fetched before anything renders so the gated panels never flash in and
+    // then vanish. `applyFeatureGates` removes them outright.
+    const featureSet = await api.features();
+    state.features = featureSet.features;
+    state.assignableRoles = featureSet.assignable_roles;
+    ui.applyFeatureGates(state.features);
     el("topbar-avatar").textContent = state.me.initials || "··";
     el("topbar-avatar").title = `${state.me.name} · ${state.me.role}`;
     el("crumb").textContent = `/ ${state.me.org_name}`;
 
+    const copy = ui.orgCopy(state.me.org_type);
+    el("page-title").textContent = copy.teamTitle;
+    el("notice-text").innerHTML = copy.teamNotice;
+
     const isAdmin = state.me.role === "admin";
     if (!isAdmin) {
       el("btn-add").style.display = "none";
-      el("audit-panel").style.display = "none";
+      // May already be gone if this account type has no audit log at all.
+      const audit = el("audit-panel");
+      if (audit) audit.style.display = "none";
+    }
+
+    // Roles the API will actually accept for this org type — the dropdown is
+    // built from the server's list rather than from the full enum, so it
+    // cannot offer a choice that is guaranteed to 400.
+    const roleSelect = el("m-role");
+    if (roleSelect) {
+      roleSelect.innerHTML = state.assignableRoles.map((r) =>
+        `<option value="${esc(r)}">${esc((ROLES[r] || { label: r }).label)}</option>`
+      ).join("");
     }
 
     await loadTeam();
-    if (isAdmin) await loadAudit();
+    if (isAdmin && api.hasFeature("audit_log")) await loadAudit();
   }
 
   async function loadTeam() {
@@ -99,8 +127,8 @@
           <td>
             ${isAdmin && !isSelf
               ? `<select class="sel-input" style="min-width:0;padding:5px 8px;font-size:11px" data-role="${m.id}">
-                   ${Object.keys(ROLES).map((r) =>
-                     `<option value="${r}" ${m.role === r ? "selected" : ""}>${esc(ROLES[r].label)}</option>`).join("")}
+                   ${state.assignableRoles.map((r) =>
+                     `<option value="${esc(r)}" ${m.role === r ? "selected" : ""}>${esc((ROLES[r] || { label: r }).label)}</option>`).join("")}
                  </select>`
               : `<span class="chip ${role.tone}">${esc(role.label.toUpperCase())}</span>`}
           </td>
@@ -185,6 +213,7 @@
 
   async function loadAudit() {
     if (state.me.role !== "admin") return;
+    if (!api.hasFeature("audit_log")) return;  // panel has been removed
     try {
       const rows = await api.getAudit(120);
       const body = el("audit-body");
@@ -201,8 +230,11 @@
         </tr>`).join("");
     } catch (err) {
       if (err && err.status === 401) return;
-      el("audit-body").innerHTML =
-        `<tr><td colspan="4" class="empty-state">${esc(err.message)}</td></tr>`;
+      const body = el("audit-body");
+      if (body) {
+        body.innerHTML =
+          `<tr><td colspan="4" class="empty-state">${esc(err.message)}</td></tr>`;
+      }
     }
   }
 
@@ -217,7 +249,12 @@
   const modal = el("add-modal");
   const openModal = () => {
     ["m-name", "m-email", "m-pass"].forEach((id) => { el(id).value = ""; });
-    el("m-role").value = "analyst";
+    // Least-privilege default that this org type actually has. "analyst" does
+    // not exist in a household, so defaulting to it would preselect an option
+    // the API is guaranteed to reject.
+    const roles = state.assignableRoles || ["viewer"];
+    const preferred = ["viewer", "analyst", "admin"].find((r) => roles.indexOf(r) !== -1);
+    el("m-role").value = preferred || roles[0];
     el("add-err").classList.remove("show");
     modal.classList.add("show");
     el("m-name").focus();

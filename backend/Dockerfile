@@ -51,4 +51,17 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 # throttle would be trivially bypassed by hitting a different worker. Scale by
 # running more containers behind a load balancer with sticky sessions, or move
 # that state to Redis first.
-CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips='*'"]
+# FORWARDED_ALLOW_IPS deliberately does NOT default to '*'. With '*', uvicorn
+# rewrites request.client.host from any X-Forwarded-For value the client sends,
+# and that header is attacker-controlled. The failed-login throttle is keyed on
+# that IP, so '*' lets anyone reset their own rate limit by rotating a header —
+# and lets them pin a chosen IP to lock a known account out on purpose.
+#
+# Set this to the address of your actual reverse proxy at deploy time. The
+# default trusts only the loopback, which is correct for a sidecar proxy and
+# fails safe otherwise: an untrusted hop leaves every request looking like it
+# came from the proxy, so the throttle degrades to per-account instead of
+# per-account-per-IP rather than switching off.
+ENV FORWARDED_ALLOW_IPS=127.0.0.1
+
+CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips=\"${FORWARDED_ALLOW_IPS}\""]

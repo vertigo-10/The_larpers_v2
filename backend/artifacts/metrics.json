@@ -1,6 +1,6 @@
 {
-  "accuracy": 100.0,
-  "trained_at": "2026-08-21T12:40:57.253236+00:00",
+  "accuracy": 97.583,
+  "trained_at": "2026-08-27T04:21:05.279843+00:00",
   "framework": "PyTorch 2.2.2",
   "architecture": "MLP 6-64-32-3",
   "features": [
@@ -21,42 +21,42 @@
   "epochs": 60,
   "confusion_matrix": [
     [
-      400,
-      0,
-      0
+      382,
+      3,
+      15
     ],
     [
       0,
-      400,
-      0
+      390,
+      10
     ],
     [
+      1,
       0,
-      0,
-      400
+      399
     ]
   ],
   "per_class": {
     "dos_ddos": {
-      "precision": 100.0,
-      "recall": 100.0,
-      "f1": 100.0,
+      "precision": 99.74,
+      "recall": 95.5,
+      "f1": 97.57,
       "support": 400
     },
     "normal": {
-      "precision": 100.0,
-      "recall": 100.0,
-      "f1": 100.0,
+      "precision": 99.24,
+      "recall": 97.5,
+      "f1": 98.36,
       "support": 400
     },
     "scan": {
-      "precision": 100.0,
-      "recall": 100.0,
-      "f1": 100.0,
+      "precision": 94.1,
+      "recall": 99.75,
+      "f1": 96.84,
       "support": 400
     }
   },
-  "mean_confidence": 99.98,
+  "mean_confidence": 97.56,
   "dataset": "synthetic",
   "dataset_note": "Trained and evaluated on synthetically generated flows, not on captured traffic or CIC-IDS2017. These scores measure separation of three synthetic clusters and should not be read as real-world detection accuracy."
 }

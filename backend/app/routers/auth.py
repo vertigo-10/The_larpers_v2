@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..engine import ensure_org_defaults
-from ..models import AuditLog, Org, OrgSettings, Role, User
+from ..features import assignable_roles, features_for
+from ..models import AuditLog, Org, OrgSettings, OrgType, Role, User
 from ..schemas import ChangePasswordIn, LoginIn, SignupIn, UpdateMeIn, UserOut
 from ..security import (
     create_access_token,
@@ -33,12 +34,35 @@ _FAILS: Dict[str, List[float]] = defaultdict(list)
 _WINDOW_S = 300.0
 _MAX_FAILS = 8
 
+# Entries only ever expired on the next attempt for that same key, so a
+# spray across many addresses or addresses left one row each that nothing
+# would ever revisit — unbounded growth an unauthenticated caller controls.
+# A periodic sweep of the whole table bounds it by the number of keys seen in
+# one window instead of by the number seen since the process started.
+_SWEEP_EVERY_S = 60.0
+_last_sweep = 0.0
 
-def _throttled(key: str) -> Tuple[bool, int]:
+
+def _sweep(now: float) -> None:
+    """Drop every key whose failures have all aged out."""
+    global _last_sweep
+    if now - _last_sweep < _SWEEP_EVERY_S:
+        return
+    _last_sweep = now
+    for k in [k for k, v in _FAILS.items() if not v or now - v[-1] >= _WINDOW_S]:
+        _FAILS.pop(k, None)
+
+
+def _throttled(key: str, max_fails: int = _MAX_FAILS) -> Tuple[bool, int]:
     now = time.time()
+    _sweep(now)
     hits = [t for t in _FAILS[key] if now - t < _WINDOW_S]
-    _FAILS[key] = hits
-    if len(hits) >= _MAX_FAILS:
+    if hits:
+        _FAILS[key] = hits
+    else:
+        # Don't let the defaultdict lookup itself leave an empty row behind.
+        _FAILS.pop(key, None)
+    if len(hits) >= max_fails:
         return True, int(_WINDOW_S - (now - hits[0]))
     return False, 0
 
@@ -74,14 +98,29 @@ def _user_out(user: User) -> UserOut:
         is_active=user.is_active,
         org_id=user.org_id,
         org_name=user.org.name if user.org else "",
+        org_type=user.org.org_type if user.org else OrgType.company.value,
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )
 
 
 @router.post("/signup", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def signup(body: SignupIn, response: Response, db: Session = Depends(get_db)):
+def signup(body: SignupIn, request: Request, response: Response, db: Session = Depends(get_db)):
     """Create an organisation and its first admin."""
+    # Signup was completely unthrottled: one loop could create unlimited orgs,
+    # each with its own settings row, seeded node topology and audit trail, and
+    # each bcrypt hash at cost 12 is deliberately expensive. That is a cheap
+    # request producing costly work, which is the shape of a denial-of-service.
+    # Keyed on address alone since there is no account to key on yet.
+    signup_key = f"signup:{request.client.host if request.client else 'unknown'}"
+    blocked, retry_in = _throttled(signup_key, settings.signup_max_per_window)
+    if blocked:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Too many signup attempts. Try again in {retry_in} seconds.",
+        )
+    _record_fail(signup_key)
+
     problem = password_problem(body.password)
     if problem:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, problem)
@@ -96,7 +135,7 @@ def signup(body: SignupIn, response: Response, db: Session = Depends(get_db)):
             "Could not create that account. Try signing in instead.",
         )
 
-    org = Org(name=body.org_name.strip())
+    org = Org(name=body.org_name.strip(), org_type=body.org_type)
     db.add(org)
     db.flush()
 
@@ -116,7 +155,7 @@ def signup(body: SignupIn, response: Response, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    ensure_org_defaults(db, org.id)
+    ensure_org_defaults(db, org.id, org_type=org.org_type)
 
     _set_session_cookie(response, create_access_token(user))
     return _user_out(user)
@@ -243,6 +282,18 @@ def change_password(
     # Minted after the commit, so it carries the bumped version and survives.
     _set_session_cookie(response, create_access_token(user))
     return {"ok": True, "other_sessions_revoked": True}
+
+
+@router.get("/features")
+def features(user: User = Depends(current_user)):
+    """What this account type offers, so the UI renders from the same table
+    the API enforces against instead of hardcoding its own copy."""
+    org_type = user.org.org_type if user.org else OrgType.company.value
+    return {
+        "org_type": org_type,
+        "features": features_for(org_type),
+        "assignable_roles": assignable_roles(org_type),
+    }
 
 
 @router.get("/bootstrap")

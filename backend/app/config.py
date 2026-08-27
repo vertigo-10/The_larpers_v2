@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     cookie_secure: Optional[bool] = None  # defaults to True in production
     cookie_samesite: str = "lax"
 
+    # Creating an org is expensive — a settings row, a seeded topology, an
+    # audit entry and a deliberately slow bcrypt hash — so it is throttled per
+    # address over the same 5-minute window as failed logins. Generous by
+    # default because several people signing up from one office NAT is normal;
+    # lower it if the deployment is invite-only. The test suite raises it since
+    # it creates many orgs from a single client.
+    signup_max_per_window: int = 20
+
     # ── database ──────────────────────────────────────────────────────────
     database_url: str = "sqlite:///./sentry.db"
 
@@ -53,7 +61,25 @@ class Settings(BaseSettings):
     simulator_enabled: Optional[bool] = None
     simulator_interval_ms: int = 1200
     default_threshold: float = 0.85
+    # Per-org row caps. Every one of these tables is written on a timer or on
+    # ingest, so without a cap they grow without bound and the only symptom is
+    # a full disk weeks later. Incidents are deliberately absent: they are the
+    # durable record the rest of this is evidence for.
     retain_flows: int = 5000
+    retain_metrics: int = 20000    # ~7h at one point per 1.2s
+    retain_anomalies: int = 2000
+    retain_audit: int = 10000
+    # How often the retention pass runs, in seconds.
+    retention_interval_s: int = 300
+
+    # ── baselining ────────────────────────────────────────────────────────
+    # Aggregate anomaly detection observes non-overlapping windows of this
+    # length. Five minutes is deliberately slower than per-flow scoring: the
+    # model already catches attack-shaped flows in real time, and this is
+    # looking for the slower signals it cannot see — volume drift, source-count
+    # explosions, a link falling silent. Shorter windows would mostly add
+    # noise. Lowered in tests to keep them fast.
+    baseline_window_s: int = 300
 
     # ── model artifacts ───────────────────────────────────────────────────
     # Anchored to the package, not the working directory. A relative default

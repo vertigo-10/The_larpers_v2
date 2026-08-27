@@ -16,6 +16,7 @@ import pytest
 _TMP_DB = os.path.join(tempfile.mkdtemp(), "analytics.db")
 os.environ["SENTRY_DATABASE_URL"] = f"sqlite:///{_TMP_DB}"
 os.environ["SENTRY_SIMULATOR_ENABLED"] = "false"
+os.environ["SENTRY_SIGNUP_MAX_PER_WINDOW"] = "100000"  # the suite creates many orgs from one client
 os.environ["SENTRY_SECRET_KEY"] = "test-key-not-used-in-production-abcdefghijklmnop"
 os.environ["SENTRY_MODEL_DIR"] = os.path.join(
     os.path.dirname(__file__), "..", "artifacts"
@@ -42,6 +43,7 @@ def _signup(client, email, org):
     client.cookies.clear()
     r = client.post("/api/auth/signup", json={
         "email": email, "password": GOOD_PW, "name": "Admin", "org_name": org,
+        "org_type": "company",
     })
     assert r.status_code == 201, r.text
     cookies = dict(client.cookies)

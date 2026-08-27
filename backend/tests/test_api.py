@@ -14,6 +14,7 @@ import pytest
 _TMP_DB = os.path.join(tempfile.mkdtemp(), "test.db")
 os.environ["SENTRY_DATABASE_URL"] = f"sqlite:///{_TMP_DB}"
 os.environ["SENTRY_SIMULATOR_ENABLED"] = "false"
+os.environ["SENTRY_SIGNUP_MAX_PER_WINDOW"] = "100000"  # the suite creates many orgs from one client
 os.environ["SENTRY_SECRET_KEY"] = "test-key-not-used-in-production-abcdefghijklmnop"
 os.environ["SENTRY_MODEL_DIR"] = os.path.join(
     os.path.dirname(__file__), "..", "artifacts"
@@ -38,7 +39,7 @@ def client():
 def org_a(client):
     r = client.post("/api/auth/signup", json={
         "email": "admin@alpha.example.com", "password": GOOD_PW,
-        "name": "Alpha Admin", "org_name": "Alpha Corp",
+        "name": "Alpha Admin", "org_name": "Alpha Corp", "org_type": "company",
     })
     assert r.status_code == 201, r.text
     cookies = dict(client.cookies)
@@ -50,7 +51,7 @@ def org_a(client):
 def org_b(client):
     r = client.post("/api/auth/signup", json={
         "email": "admin@beta.example.com", "password": GOOD_PW,
-        "name": "Beta Admin", "org_name": "Beta Ltd",
+        "name": "Beta Admin", "org_name": "Beta Ltd", "org_type": "consumer",
     })
     assert r.status_code == 201, r.text
     cookies = dict(client.cookies)
@@ -72,7 +73,7 @@ def test_signup_never_returns_password_hash(org_a):
 def test_weak_password_rejected(client):
     r = client.post("/api/auth/signup", json={
         "email": "weak@alpha.example.com", "password": "short",
-        "name": "Weak", "org_name": "Weak Co",
+        "name": "Weak", "org_name": "Weak Co", "org_type": "company",
     })
     assert r.status_code == 422  # fails pydantic min_length
 
@@ -80,7 +81,7 @@ def test_weak_password_rejected(client):
 def test_common_password_rejected(client):
     r = client.post("/api/auth/signup", json={
         "email": "weak2@alpha.example.com", "password": "sentrypassword123",
-        "name": "Weak", "org_name": "Weak Co",
+        "name": "Weak", "org_name": "Weak Co", "org_type": "company",
     })
     assert r.status_code == 400
     assert "guessed" in r.json()["detail"].lower()
@@ -89,7 +90,7 @@ def test_common_password_rejected(client):
 def test_duplicate_email_does_not_confirm_existence(client, org_a):
     r = client.post("/api/auth/signup", json={
         "email": "admin@alpha.example.com", "password": GOOD_PW,
-        "name": "Impostor", "org_name": "Impostor Inc",
+        "name": "Impostor", "org_name": "Impostor Inc", "org_type": "company",
     })
     assert r.status_code == 400
     # Must not say "already registered" — that is an enumeration oracle.
@@ -117,6 +118,168 @@ def test_session_cookie_is_httponly(client, org_a):
     set_cookie = r.headers.get("set-cookie", "")
     assert "httponly" in set_cookie.lower()
     client.cookies.clear()
+
+
+# ── org type ──────────────────────────────────────────────────────────────
+def test_signup_exposes_org_type(org_a, org_b):
+    assert org_a["user"]["org_type"] == "company"
+    assert org_b["user"]["org_type"] == "consumer"
+
+
+def test_signup_rejects_invalid_org_type(client):
+    r = client.post("/api/auth/signup", json={
+        "email": "bad-org-type@alpha.example.com", "password": GOOD_PW,
+        "name": "Nope", "org_name": "Nope Co", "org_type": "government",
+    })
+    assert r.status_code == 422
+
+
+def test_signup_requires_org_type(client):
+    r = client.post("/api/auth/signup", json={
+        "email": "no-org-type@alpha.example.com", "password": GOOD_PW,
+        "name": "Nope", "org_name": "Nope Co",
+    })
+    assert r.status_code == 422
+
+
+def test_company_org_gets_enterprise_node_topology(client, org_a):
+    r = client.get("/api/nodes", cookies=org_a["cookies"])
+    assert r.status_code == 200
+    labels = {n["label"] for n in r.json()}
+    assert {"EDGE-01", "DC-LB-01"} <= labels
+
+
+def test_consumer_org_gets_home_node_topology(client, org_b):
+    r = client.get("/api/nodes", cookies=org_b["cookies"])
+    assert r.status_code == 200
+    labels = {n["label"] for n in r.json()}
+    assert labels == {"HOME-ROUTER", "IOT-DEVICES", "PERSONAL-DEVICES"}
+
+
+# ── org feature sets ──────────────────────────────────────────────────────
+def test_features_endpoint_differs_by_org_type(client, org_a, org_b):
+    a = client.get("/api/auth/features", cookies=org_a["cookies"]).json()
+    b = client.get("/api/auth/features", cookies=org_b["cookies"]).json()
+
+    assert a["org_type"] == "company"
+    assert b["org_type"] == "consumer"
+
+    assert a["features"]["audit_log"] is True
+    assert b["features"]["audit_log"] is False
+
+    assert a["features"]["roles"] is True
+    assert b["features"]["roles"] is False
+
+    # Both keep API keys — a household still has to authenticate its collector.
+    assert a["features"]["api_keys"] is True
+    assert b["features"]["api_keys"] is True
+    assert a["features"]["multiple_api_keys"] is True
+    assert b["features"]["multiple_api_keys"] is False
+
+
+def test_consumer_cannot_read_the_audit_log(client, org_b):
+    """Gated server-side, not merely hidden in the sidebar.
+
+    The whole point of the feature table is that it is enforced where it
+    matters. A consumer admin hitting the URL directly must be refused.
+    """
+    r = client.get("/api/team/audit", cookies=org_b["cookies"])
+    assert r.status_code == 403
+    assert "not available" in r.json()["detail"]
+
+
+def test_company_can_read_the_audit_log(client, org_a):
+    r = client.get("/api/team/audit", cookies=org_a["cookies"])
+    assert r.status_code == 200
+
+
+def test_consumer_cannot_assign_the_analyst_role(client, org_b):
+    """A household gets admin/viewer, and the API is the enforcement point."""
+    r = client.post("/api/team", cookies=org_b["cookies"], json={
+        "email": "analyst@beta.example.com", "name": "Nope",
+        "role": "analyst", "password": GOOD_PW,
+    })
+    assert r.status_code == 400
+    assert "not available for this account type" in r.json()["detail"]
+
+
+def test_consumer_can_still_add_a_viewer(client, org_b):
+    r = client.post("/api/team", cookies=org_b["cookies"], json={
+        "email": "viewer@beta.example.com", "name": "Housemate",
+        "role": "viewer", "password": GOOD_PW,
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["role"] == "viewer"
+
+    # Removed again so the shared org_b fixture keeps the single-member roster
+    # that the tenant-isolation test asserts on.
+    assert client.delete(f"/api/team/{r.json()['id']}",
+                         cookies=org_b["cookies"]).status_code == 200
+
+
+def test_company_can_still_assign_the_analyst_role(client, org_a):
+    r = client.post("/api/team", cookies=org_a["cookies"], json={
+        "email": "analyst@alpha.example.com", "name": "Analyst",
+        "role": "analyst", "password": GOOD_PW,
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["role"] == "analyst"
+
+
+def test_consumer_is_limited_to_one_active_collector_key(client, org_b):
+    first = client.post("/api/team/keys", cookies=org_b["cookies"],
+                        json={"label": "home collector"})
+    assert first.status_code == 201, first.text
+
+    second = client.post("/api/team/keys", cookies=org_b["cookies"],
+                         json={"label": "another"})
+    assert second.status_code == 400
+    assert "single collector key" in second.json()["detail"]
+
+    # Revoking frees the slot — the cap is on active keys, not lifetime ones.
+    key_id = first.json()["id"]
+    assert client.delete(f"/api/team/keys/{key_id}",
+                         cookies=org_b["cookies"]).status_code == 200
+    third = client.post("/api/team/keys", cookies=org_b["cookies"],
+                        json={"label": "replacement"})
+    assert third.status_code == 201, third.text
+
+
+def test_company_can_mint_several_keys(client, org_a):
+    a = client.post("/api/team/keys", cookies=org_a["cookies"],
+                    json={"label": "site-a"})
+    b = client.post("/api/team/keys", cookies=org_a["cookies"],
+                    json={"label": "site-b"})
+    assert a.status_code == 201 and b.status_code == 201
+
+
+def test_ingest_registers_a_new_node_automatically(client, org_a):
+    """A real collector names nodes the demo topology never seeded.
+
+    Without auto-registration the flow would still be scored and stored, but
+    the Nodes page — which only lists rows from the nodes table — would never
+    show it, making a real deployment look empty even while it works.
+    """
+    r = client.post("/api/ingest", cookies=org_a["cookies"], json={"flows": [{
+        "src_ip": "10.0.0.9", "dst_port": 443, "protocol": "TCP",
+        "node": "MACBOOK-JUDE", "duration": 0.02, "packets": 12,
+        "total_bytes": 4096,
+    }]})
+    assert r.status_code == 200, r.text
+
+    listed = client.get("/api/nodes", cookies=org_a["cookies"]).json()
+    row = next(n for n in listed if n["label"] == "MACBOOK-JUDE")
+    assert row["desc"] == "Detected from live traffic"
+
+
+def test_ingest_does_not_register_the_unknown_placeholder(client, org_a):
+    r = client.post("/api/ingest", cookies=org_a["cookies"], json={"flows": [{
+        "src_ip": "10.0.0.10", "dst_port": 80, "duration": 0.01, "packets": 3,
+    }]})
+    assert r.status_code == 200, r.text
+
+    listed = client.get("/api/nodes", cookies=org_a["cookies"]).json()
+    assert all(n["label"] != "unknown" for n in listed)
 
 
 # ── model + detection ─────────────────────────────────────────────────────
@@ -327,6 +490,177 @@ def test_logout_revokes_the_token_server_side(client, make_user):
 
     # Replaying it after logout must fail.
     assert client.get("/api/summary", cookies=stolen).status_code == 401
+
+
+def test_listed_flows_carry_a_severity(client, org_a):
+    """
+    The dashboard filters desktop notifications on flow.severity. If the field
+    is absent the filter silently degrades to "notify on everything", which is
+    exactly the behaviour the min_severity setting exists to prevent — so the
+    field being present is worth pinning.
+    """
+    flows = client.get("/api/flows?limit=25", cookies=org_a["cookies"]).json()
+    # isinstance, not just truthiness: an error body like {"detail": ...} is
+    # truthy too, and would otherwise sail past this into a confusing TypeError.
+    assert isinstance(flows, list), f"expected a list, got {flows!r}"
+    assert flows, "expected the fixture org to have flows"
+    valid = {"low", "medium", "high", "critical"}
+    for f in flows:
+        assert "severity" in f, f"flow {f['id']} has no severity"
+        assert f["severity"] in valid, f"unexpected severity {f['severity']!r}"
+
+
+def test_severity_matches_the_engine_rule(client, org_a):
+    """
+    Severity is recomputed on read rather than stored. That is only safe if the
+    recomputation agrees with the engine's own rule, so compare against it
+    directly instead of hardcoding expected strings here.
+    """
+    from backend.app.engine import severity_for
+
+    flows = client.get("/api/flows?limit=25", cookies=org_a["cookies"]).json()
+    assert isinstance(flows, list) and flows, f"expected a list, got {flows!r}"
+    for f in flows:
+        expected = severity_for(f["prediction"], f["confidence"], f["bytes_per_sec"])
+        assert f["severity"] == expected, (
+            f"flow {f['id']}: API said {f['severity']!r}, "
+            f"engine rule says {expected!r}"
+        )
+
+
+def test_flow_search_treats_wildcards_as_literals(client, org_a):
+    """A bare "%" in the search box must not match everything.
+
+    LIKE wildcards live inside the bound parameter, so parameterisation alone
+    does not neutralise them. Unescaped, typing "%" returns the entire flow
+    table — not a SQL injection, but an unintended full dump through a control
+    that looks like a filter.
+    """
+    # Own data, so the assertion does not depend on which tests ran first.
+    assert client.post("/api/ingest", cookies=org_a["cookies"], json={"flows": [{
+        "src_ip": "10.55.55.55", "dst_port": 8443, "protocol": "TCP",
+        "node": "SEARCHTEST", "duration": 0.02, "packets": 6, "total_bytes": 900,
+    }]}).status_code == 200
+
+    everything = client.get("/api/flows", cookies=org_a["cookies"]).json()
+    assert len(everything) > 0, "fixture produced no flows to search"
+
+    wild = client.get("/api/flows", cookies=org_a["cookies"], params={"q": "%"})
+    assert wild.status_code == 200
+    assert wild.json() == [], "% should be a literal, not a match-all wildcard"
+
+    # "_" is a literal, so it legitimately matches the underscore in the
+    # "dos_ddos" class name — but it must not match rows with no underscore
+    # anywhere, which is what the single-character wildcard would do.
+    underscore = client.get("/api/flows", cookies=org_a["cookies"],
+                            params={"q": "_"}).json()
+    assert all(
+        "_" in (f["src_ip"] + f["node"] + f["prediction"] + f["id"])
+        for f in underscore
+    ), "_ matched a row containing no literal underscore"
+    assert len(underscore) < len(everything), "_ behaved as a match-all"
+
+    # Escaping must not break ordinary search.
+    hit = client.get("/api/flows", cookies=org_a["cookies"],
+                     params={"q": "10.55.55.55"}).json()
+    assert any(f["src_ip"] == "10.55.55.55" for f in hit)
+
+
+def test_retention_bounds_flows_without_the_simulator(client, monkeypatch):
+    """Retention must work with the simulator off — that is production.
+
+    The trim call used to live inside `if settings.simulator_enabled:` in the
+    engine loop, so the only deployments that trimmed anything were the demo
+    ones that did not need to. A real install with a collector feeding it grew
+    forever, and the only symptom was a full disk.
+
+    Its own org, because the assertion is an exact row count and a shared
+    fixture org would make that depend on test ordering.
+    """
+    from backend.app.config import settings
+    from backend.app.db import SessionLocal
+    from backend.app.engine import retention_pass
+    from backend.app.models import Flow
+
+    assert settings.simulator_enabled is False, "retention must hold with the sim off"
+
+    r = client.post("/api/auth/signup", json={
+        "email": "retention@gamma.example.com", "password": GOOD_PW,
+        "name": "Retention Admin", "org_name": "Gamma Ltd", "org_type": "company",
+    })
+    assert r.status_code == 201, r.text
+    cookies = dict(r.cookies)
+    org_id = r.json()["org_id"]
+    client.cookies.clear()
+
+    keep = 40
+    monkeypatch.setattr(settings, "retain_flows", keep)
+
+    over = keep + 15
+    batch = [{
+        "src_ip": f"10.9.{i // 256}.{i % 256}", "dst_port": 443,
+        "duration": 0.02, "packets": 4, "total_bytes": 512,
+    } for i in range(over)]
+    assert client.post("/api/ingest", cookies=cookies,
+                       json={"flows": batch}).status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.query(Flow).filter(Flow.org_id == org_id).count() == over
+    finally:
+        db.close()
+
+    retention_pass()
+
+    db = SessionLocal()
+    try:
+        after = db.query(Flow).filter(Flow.org_id == org_id).count()
+    finally:
+        db.close()
+    assert after == keep, f"expected the cap to hold at {keep}, got {after}"
+
+
+def test_websocket_rejects_an_unauthenticated_connection(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    client.cookies.clear()
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_text()
+
+
+def test_websocket_accepts_a_live_session(client, make_user):
+    cookies = _login(client, make_user())
+    client.cookies.clear()
+    with client.websocket_connect("/ws", cookies=cookies) as ws:
+        assert ws is not None
+
+
+def test_websocket_rejects_a_revoked_token(client, make_user):
+    """Signing out must also kill the live stream, not just the HTTP session.
+
+    The HTTP routes re-authenticate on every request, so revocation there is
+    self-enforcing. A WebSocket authenticates once and then stays open for
+    hours, which is precisely where a token that is still cryptographically
+    valid but logically dead does the most damage: the captured cookie would
+    keep streaming this org's traffic for the rest of the TTL.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    stolen = _login(client, make_user())
+
+    # Live session: the socket opens.
+    client.cookies.clear()
+    with client.websocket_connect("/ws", cookies=stolen) as ws:
+        assert ws is not None
+
+    assert client.post("/api/auth/logout", cookies=stolen).status_code == 200
+    client.cookies.clear()
+
+    # Same cookie, after logout: refused.
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws", cookies=stolen) as ws:
+            ws.receive_text()
 
 
 def test_logout_works_without_a_session(client):

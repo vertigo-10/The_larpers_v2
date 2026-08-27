@@ -41,11 +41,30 @@ class IncidentStatus(str, enum.Enum):
     resolved = "resolved"
 
 
+class OrgType(str, enum.Enum):
+    """What kind of network this org is protecting.
+
+    This is not cosmetic: it picks the default node topology seeded at signup
+    (a company gets edge/DC/API-tier segments, a household gets a router and a
+    couple of device groups) and it steers a handful of nav labels and page
+    copy so the product reads like it was built for whichever one you are,
+    instead of a scaled-down enterprise tool wearing a coat of paint.
+    """
+
+    company = "company"
+    consumer = "consumer"
+
+
 class Org(Base):
     __tablename__ = "orgs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Existing orgs (created before this column existed) default to "company"
+    # via the additive migration below, matching the enterprise-style demo
+    # topology they were already seeded with — not "consumer", which would
+    # silently relabel a workspace nobody asked to relabel.
+    org_type: Mapped[str] = mapped_column(String(20), default=OrgType.consumer.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     users: Mapped[list["User"]] = relationship(back_populates="org", cascade="all, delete-orphan")
@@ -267,6 +286,81 @@ class MetricPoint(Base):
     throughput: Mapped[float] = mapped_column(Float)
     threat: Mapped[float] = mapped_column(Float)
     flows: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Baseline(Base):
+    """What this network normally looks like, per metric, per time-of-week bucket.
+
+    The model classifies each flow on its own shape, so it cannot see an attack
+    that is only visible in aggregate — traffic quietly tripling, a thousand new
+    source addresses appearing, a link going silent. That is what a baseline is
+    for, and it is a genuinely different question from "is this flow malicious".
+
+    Buckets are (weekend?, hour-of-day), so 48 of them. A full hour-of-week
+    baseline would be more precise but needs a month of traffic before it says
+    anything useful; 48 buckets still separate 3am from 3pm and Sunday from
+    Tuesday, which is where nearly all of the daily variation lives, and they
+    warm up in a few days instead.
+
+    Mean and variance are kept incrementally (EWMA/EWMV) rather than by
+    retaining samples, so the table stays a fixed size no matter how long the
+    deployment runs.
+    """
+
+    __tablename__ = "baselines"
+    __table_args__ = (
+        UniqueConstraint("org_id", "metric", "bucket", name="uq_baseline_slot"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+
+    metric: Mapped[str] = mapped_column(String(20))   # flows | bytes | sources
+    bucket: Mapped[int] = mapped_column(Integer)      # 0-47
+
+    mean: Mapped[float] = mapped_column(Float, default=0.0)
+    variance: Mapped[float] = mapped_column(Float, default=0.0)
+    samples: Mapped[int] = mapped_column(Integer, default=0)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Anomaly(Base):
+    """An observation that did not match the baseline.
+
+    Separate from Incident on purpose. An incident is "this source is attacking
+    us" and is keyed by source IP; an anomaly is "the shape of our traffic
+    changed" and has no single source to blame. Conflating them would mean an
+    analyst filtering incidents by IP silently loses every aggregate signal.
+    """
+
+    __tablename__ = "anomalies"
+    __table_args__ = (Index("ix_anomalies_org_ts", "org_id", "ts"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    metric: Mapped[str] = mapped_column(String(20))
+    direction: Mapped[str] = mapped_column(String(10))  # spike | drop
+
+    observed: Mapped[float] = mapped_column(Float)
+    expected: Mapped[float] = mapped_column(Float)
+    deviation: Mapped[float] = mapped_column(Float)  # signed z-score
+    severity: Mapped[str] = mapped_column(String(20), default="medium")
+
+    # An attack lasting twenty minutes should be one anomaly that stays open,
+    # not twenty rows. Consecutive breaches extend the open row instead.
+    windows: Mapped[int] = mapped_column(Integer, default=1)
+    peak_deviation: Mapped[float] = mapped_column(Float, default=0.0)
+
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)
+    acknowledged_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    acknowledged_by: Mapped[Optional["User"]] = relationship()
 
 
 class AuditLog(Base):

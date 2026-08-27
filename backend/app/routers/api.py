@@ -10,16 +10,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .. import __version__
+from .. import baseline as bl
 from ..config import settings
 from ..db import get_db
-from ..engine import BENIGN, manager, process_flows
+from ..engine import BENIGN, manager, process_flows, severity_for
 from ..ml.infer import get_detector
 from ..models import (
+    Anomaly,
     AuditLog,
+    Baseline,
     Flow,
     Incident,
     IncidentStatus,
@@ -29,6 +32,9 @@ from ..models import (
     User,
 )
 from ..schemas import (
+    AnomalyOut,
+    BaselineOut,
+    BaselineSlotOut,
     BreakdownOut,
     FlowBatchIn,
     IncidentActionIn,
@@ -222,13 +228,22 @@ def list_flows(
         stmt = stmt.where(Flow.node == node)
 
     if q:
-        term = f"%{q.strip()}%"
-        # Parameterised LIKE — no string interpolation into SQL.
-        conditions = [Flow.src_ip.like(term), Flow.node.like(term),
-                      Flow.prediction.like(term), Flow.flow_ref.like(term)]
-        if q.strip().isdigit():
-            conditions.append(Flow.dst_port == int(q.strip()))
-        from sqlalchemy import or_
+        raw = q.strip()
+        # Parameterised LIKE — no string interpolation into SQL. The value is
+        # still escaped, because % and _ are wildcards *inside* the parameter:
+        # a bare "%" would match every row, turning the search box into a way
+        # to pull the whole flow table regardless of what was typed, and "_"
+        # silently matches any character rather than an underscore.
+        escaped = raw.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        term = f"%{escaped}%"
+        conditions = [
+            Flow.src_ip.like(term, escape="\\"),
+            Flow.node.like(term, escape="\\"),
+            Flow.prediction.like(term, escape="\\"),
+            Flow.flow_ref.like(term, escape="\\"),
+        ]
+        if raw.isdigit():
+            conditions.append(Flow.dst_port == int(raw))
         stmt = stmt.where(or_(*conditions))
 
     rows = db.execute(stmt.order_by(Flow.ts.desc()).limit(limit)).scalars().all()
@@ -245,6 +260,11 @@ def list_flows(
             "bytes_per_sec": round(r.bytes_per_sec, 1),
             "prediction": r.prediction,
             "confidence": round(r.confidence, 4),
+            # Recomputed rather than stored: severity is a pure function of
+            # (label, confidence, bps), so persisting it would add a column
+            # that can silently disagree with the rule after a tuning change.
+            # This keeps the shape identical to the live WebSocket payload.
+            "severity": severity_for(r.prediction, r.confidence, r.bytes_per_sec),
             "mitigated": r.mitigated,
             "source": r.source,
         }
@@ -511,6 +531,120 @@ def analytics_traffic(
     return TrafficBreakdownOut(window_minutes=window, protocols=protocols, ports=ports)
 
 
+# ── baselining ────────────────────────────────────────────────────────────
+def _anomaly_out(row: Anomaly) -> AnomalyOut:
+    return AnomalyOut(
+        id=row.id,
+        ts=_epoch(row.ts),
+        last_seen_at=_epoch(row.last_seen_at),
+        metric=row.metric,
+        metric_label=bl.METRIC_LABELS.get(row.metric, row.metric),
+        direction=row.direction,
+        observed=round(row.observed, 2),
+        expected=round(row.expected, 2),
+        deviation=round(row.deviation, 2),
+        peak_deviation=round(row.peak_deviation, 2),
+        severity=row.severity,
+        windows=row.windows,
+        status=row.status,
+        acknowledged_by=row.acknowledged_by.name if row.acknowledged_by else None,
+    )
+
+
+@router.get("/anomalies", response_model=List[AnomalyOut])
+def anomalies(
+    status_filter: str = Query(default="all", alias="status"),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Deviations from the learned baseline, newest first."""
+    stmt = select(Anomaly).where(Anomaly.org_id == user.org_id)
+    if status_filter != "all":
+        stmt = stmt.where(Anomaly.status == status_filter)
+    rows = db.execute(
+        stmt.order_by(Anomaly.last_seen_at.desc()).limit(limit)
+    ).scalars().all()
+    return [_anomaly_out(r) for r in rows]
+
+
+@router.post("/anomalies/{anomaly_id}/acknowledge", response_model=AnomalyOut)
+def acknowledge_anomaly(
+    anomaly_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_operator),
+):
+    row = db.get(Anomaly, anomaly_id)
+    if row is None or row.org_id != user.org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Anomaly not found")
+    row.status = "acknowledged"
+    row.acknowledged_by_id = user.id
+    db.add(AuditLog(
+        org_id=user.org_id, user_id=user.id, user_label=user.name,
+        action="anomaly.acknowledge",
+        detail=f"{row.direction} in {row.metric} ({row.deviation:+.1f}σ)",
+    ))
+    db.commit()
+    db.refresh(row)
+    return _anomaly_out(row)
+
+
+@router.get("/baseline", response_model=BaselineOut)
+def baseline_profile(
+    metric: str = Query(default="flows"),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """The learned normal for one metric, plus how much of it is trustworthy.
+
+    Returning `warmth` alongside the profile is the point: an empty anomaly
+    list means "nothing unusual" only once the baseline has actually learned
+    something, and before that it means "no opinion yet".
+    """
+    if metric not in bl.METRICS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Unknown metric. Expected one of: {', '.join(bl.METRICS)}",
+        )
+
+    rows = db.execute(
+        select(Baseline)
+        .where(Baseline.org_id == user.org_id, Baseline.metric == metric)
+        .order_by(Baseline.bucket)
+    ).scalars().all()
+
+    slots = [
+        BaselineSlotOut(
+            bucket=r.bucket,
+            label=bl.describe_bucket(r.bucket),
+            metric=r.metric,
+            mean=round(r.mean, 2),
+            sigma=round(bl.sigma_for(r.mean, r.variance, r.metric), 2),
+            samples=r.samples,
+            ready=r.samples >= bl.MIN_SAMPLES,
+        )
+        for r in rows
+    ]
+
+    window = max(settings.baseline_window_s, 30)
+    now = datetime.now(timezone.utc)
+    observed = bl.observe(
+        db, user.org_id, now - timedelta(seconds=window), now
+    )
+
+    return BaselineOut(
+        window_seconds=window,
+        z_threshold=bl.Z_THRESHOLD,
+        warmth=bl.warmth(db, user.org_id),
+        slots=slots,
+        current={
+            "bucket": bl.bucket_for(now),
+            "label": bl.describe_bucket(bl.bucket_for(now)),
+            "values": {k: round(v, 2) for k, v in observed.items()},
+        },
+    )
+
+
 @router.get("/nodes")
 def nodes(db: Session = Depends(get_db), user: User = Depends(current_user)):
     since = datetime.now(timezone.utc) - timedelta(minutes=5)
@@ -590,11 +724,15 @@ def incident_action(
         inc.resolved_at = None
     elif body.action == "mitigate":
         inc.mitigated = True
+        # One UPDATE. The previous version ran a SELECT whose result was
+        # discarded, then a second SELECT that loaded every flow of the
+        # incident into the identity map to set one boolean each — on a large
+        # incident that is thousands of objects hydrated to write one column.
         db.execute(
-            select(Flow).where(Flow.incident_id == inc.id)
-        )  # touch for clarity; bulk update below
-        for f in db.execute(select(Flow).where(Flow.incident_id == inc.id)).scalars():
-            f.mitigated = True
+            update(Flow)
+            .where(Flow.incident_id == inc.id, Flow.org_id == user.org_id)
+            .values(mitigated=True)
+        )
 
     db.add(AuditLog(org_id=user.org_id, user_id=user.id, user_label=user.name,
                     action=f"incident.{body.action}",
@@ -628,22 +766,25 @@ def mitigate(
     if not body.flow_id and not body.src_ip:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Provide flow_id or src_ip.")
 
-    stmt = select(Flow).where(Flow.org_id == user.org_id)
+    # Bulk UPDATE rather than loading every matching flow. Mitigating by
+    # src_ip during an active flood can match tens of thousands of rows, and
+    # hydrating each one to flip a boolean is what turns a fast action into a
+    # request that times out exactly when the operator most needs it.
+    stmt = update(Flow).where(Flow.org_id == user.org_id)
     if body.flow_id:
         stmt = stmt.where(Flow.flow_ref == body.flow_id)
     if body.src_ip:
         stmt = stmt.where(Flow.src_ip == body.src_ip)
 
-    rows = db.execute(stmt).scalars().all()
-    for r in rows:
-        r.mitigated = True
+    result = db.execute(stmt.values(mitigated=True))
+    count = result.rowcount or 0
 
     target = body.flow_id or body.src_ip
     db.add(AuditLog(org_id=user.org_id, user_id=user.id, user_label=user.name,
                     action="flow.mitigated",
-                    detail=f"Mitigated {len(rows)} flow(s) matching {target}"))
+                    detail=f"Mitigated {count} flow(s) matching {target}"))
     db.commit()
-    return {"ok": True, "count": len(rows), "enforced": False,
+    return {"ok": True, "count": count, "enforced": False,
             "note": "Recorded in SENTRY. Connect an enforcement hook to block at the network edge."}
 
 

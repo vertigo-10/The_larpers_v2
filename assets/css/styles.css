@@ -710,6 +710,18 @@ body.auth { overflow: auto; display: grid; place-items: center; min-height: 100v
 .auth-btn:hover { filter: brightness(1.08); }
 .auth-btn[disabled] { opacity: 0.55; cursor: not-allowed; }
 .auth-alt { margin-top: 18px; text-align: center; font-size: 12px; color: var(--muted); }
+
+.org-type-picker { display: flex; flex-direction: column; gap: 8px; }
+.org-type-opt {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  background: #0c1012; border: 1px solid var(--border); border-radius: 9px;
+  padding: 10px 12px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.org-type-opt:hover { border-color: rgba(47, 224, 138, 0.3); }
+.org-type-opt.selected { border-color: rgba(47, 224, 138, 0.55); background: var(--green-glow); }
+.org-type-opt .t { font-size: 12.5px; font-weight: 600; }
+.org-type-opt.selected .t { color: var(--green); }
+.org-type-opt .d { font-size: 10.5px; color: var(--muted); line-height: 1.5; }
 .auth-alt a { color: var(--green); font-weight: 600; }
 .form-error {
   display: none;

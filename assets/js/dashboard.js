@@ -392,8 +392,27 @@
     }
   }
 
+  // Matches _SEVERITY_RANK in backend/app/engine.py. Kept as an explicit map
+  // rather than an array index so an unknown value from a future server is
+  // caught by the -1 below instead of silently sorting as "low".
+  const SEVERITY_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
+
+  /**
+   * The org's "minimum severity to alert on" setting. Until this existed the
+   * dropdown was stored, validated and displayed but read by nothing — the
+   * settings page described behaviour the product did not have.
+   */
+  function meetsMinSeverity(flow) {
+    const min = SEVERITY_RANK[state.settings && state.settings.min_severity];
+    if (min === undefined) return true;      // unset or unrecognised: don't suppress
+    const actual = SEVERITY_RANK[flow.severity];
+    if (actual === undefined) return true;   // older payload without severity
+    return actual >= min;
+  }
+
   function notify(flow) {
     if (!el("chk-alert").checked) return;
+    if (!meetsMinSeverity(flow)) return;
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     const meta = classMeta(flow.prediction);
     new Notification(`SENTRY — ${meta.label} detected`, {

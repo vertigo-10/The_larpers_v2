@@ -18,7 +18,8 @@
     listeners: { flow: [], metric: [], status: [] },
     reconnectDelay: 1000,
     lastError: null,
-    user: null
+    user: null,
+    features: null
   };
 
   const AUTH_PAGES = ["/login.html", "/signup.html"];
@@ -58,6 +59,9 @@
 
     if (res.status === 401) {
       state.user = null;
+      // Cleared alongside the user: the next session may be a different
+      // account type, and a stale map would render the wrong feature set.
+      state.features = null;
       if (!onAuthPage()) {
         const next = encodeURIComponent(window.location.pathname + window.location.search);
         window.location.href = `login.html?next=${next}`;
@@ -104,6 +108,25 @@
       state.user = await get("/api/auth/me");
       return state.user;
     },
+
+    /**
+     * What this account type offers. Cached like `me` because it is read on
+     * every page render and cannot change without a reload.
+     *
+     * This is advisory only — it decides what to *draw*. The API enforces the
+     * same table independently, so a consumer account that guesses a gated URL
+     * still gets a 403 rather than an audit log.
+     */
+    async features(force) {
+      if (state.features && !force) return state.features;
+      state.features = await get("/api/auth/features");
+      return state.features;
+    },
+    /** Convenience predicate. Defaults to hiding when the map is unavailable. */
+    hasFeature(name) {
+      const f = state.features && state.features.features;
+      return Boolean(f && f[name]);
+    },
     // Self-service profile edit. Separate from updateMember (admin-only) on
     // purpose: this route cannot change role or active status.
     async updateProfile(data) {
@@ -140,6 +163,12 @@
       return get(`/api/analytics/talkers?window=${window}&limit=${limit}`);
     },
     getTrafficBreakdown: (window = 15) => get(`/api/analytics/traffic?window=${window}`),
+
+    // ── baseline + anomalies ────────────────────────────────────────────
+    getAnomalies: (status = "all", limit = 100) =>
+      get(`/api/anomalies?status=${status}&limit=${limit}`),
+    acknowledgeAnomaly: (id) => post(`/api/anomalies/${id}/acknowledge`),
+    getBaseline: (metric = "flows") => get(`/api/baseline?metric=${metric}`),
 
     // ── incidents ───────────────────────────────────────────────────────
     getIncidents: (status = "all", limit = 100) =>

@@ -16,26 +16,26 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .baseline import baseline_loop, stop_baseline
 from .config import settings
 from .db import SessionLocal, init_db
-from .engine import engine_loop, manager, stop_engine
+from .engine import engine_loop, manager, retention_loop, stop_engine
 from .ml.infer import get_detector
 from .models import User
 from .routers import api as api_router
 from .routers import auth as auth_router
 from .routers import team as team_router
-from .security import decode_token
+from .security import decode_token, token_is_revoked
 
 FRONTEND_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
 
-_engine_task = None
+_background_tasks = []
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _engine_task
     init_db()
 
     detector = get_detector()
@@ -49,17 +49,26 @@ async def lifespan(app: FastAPI):
         print("[sentry] detection endpoints will report unavailable until you run:")
         print("[sentry]     python -m backend.app.ml.train")
 
-    _engine_task = asyncio.create_task(engine_loop())
+    # Baselining and retention both run whether or not the simulator does — a
+    # production deployment has the simulator off and still needs its traffic
+    # baselined and its append-only tables trimmed.
+    _background_tasks.extend([
+        asyncio.create_task(engine_loop()),
+        asyncio.create_task(baseline_loop()),
+        asyncio.create_task(retention_loop()),
+    ])
     try:
         yield
     finally:
         stop_engine()
-        if _engine_task:
-            _engine_task.cancel()
+        stop_baseline()
+        for task in _background_tasks:
+            task.cancel()
             try:
-                await _engine_task
+                await task
             except (asyncio.CancelledError, Exception):  # noqa: B014
                 pass
+        _background_tasks.clear()
 
 
 app = FastAPI(
@@ -84,6 +93,29 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+
+    # Defence in depth behind the esc() discipline in the frontend. If one
+    # unescaped interpolation ever slips through, this is what stops the
+    # injected script from running at all, and stops any payload that does run
+    # from exfiltrating to an attacker's host.
+    #
+    # 'unsafe-inline' for styles only: several pages set element.style directly
+    # (the password hint colour, chart sizing). Scripts get no such exemption,
+    # which is the half that actually matters. cdn.jsdelivr.net is Chart.js.
+    # connect-src includes ws:/wss: for the live flow socket.
+    response.headers["Content-Security-Policy"] = "; ".join([
+        "default-src 'self'",
+        "script-src 'self' https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "connect-src 'self' ws: wss:",
+        "font-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+    ])
+
     if settings.is_production:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
@@ -111,6 +143,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
     The session cookie is validated before accept(); an unauthenticated socket is
     closed rather than silently receiving another tenant's traffic.
+
+    Revocation is checked here too, not just signature validity. A signed token
+    stays cryptographically valid until it expires, so without the token_version
+    check a socket opened before signing out — or before a password change made
+    precisely because the token leaked — would keep streaming live traffic for
+    the rest of the TTL. Long-lived connections are exactly where that gap
+    matters most: the HTTP routes re-authenticate on every request, a WebSocket
+    authenticates once and then runs for hours.
     """
     token = websocket.cookies.get(settings.cookie_name)
     payload = decode_token(token) if token else None
@@ -122,6 +162,9 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         user = db.get(User, int(payload.get("sub", 0)))
         if not user or not user.is_active or user.org_id != payload.get("org"):
+            await websocket.close(code=4401)
+            return
+        if token_is_revoked(user, payload):
             await websocket.close(code=4401)
             return
         org_id = user.org_id

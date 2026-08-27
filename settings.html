@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
 </head>
 <body>
 <div class="app">
@@ -94,7 +94,13 @@
           <div class="setting-row">
             <div class="setting-info">
               <div class="t">Minimum severity to alert on</div>
-              <div class="d">Incidents below this level are recorded but do not raise an alert.</div>
+              <div class="d">
+                Detections below this level are still recorded and still appear
+                in the flow table and incident list — they just don't raise a
+                desktop notification. Severity is derived from the class and
+                confidence of the detection, so a low-confidence port scan
+                ranks below a high-rate flood.
+              </div>
             </div>
             <div class="setting-control">
               <select class="sel-input" id="in-severity">
@@ -235,9 +241,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js"></script>
-<script src="assets/js/api.js"></script>
-<script src="assets/js/ui.js"></script>
-<script src="assets/js/settings.js"></script>
+<script src="assets/js/config.js?v=20260826"></script>
+<script src="assets/js/api.js?v=20260826"></script>
+<script src="assets/js/ui.js?v=20260826"></script>
+<script src="assets/js/settings.js?v=20260826"></script>
 </body>
 </html>

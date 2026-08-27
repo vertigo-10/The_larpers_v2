@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
 </head>
 <body>
 <div class="app">
@@ -15,7 +15,7 @@
 
   <div class="main">
     <header class="topbar">
-      <h1>Team</h1>
+      <h1 id="page-title">Team</h1>
       <span class="crumb" id="crumb">/ organisation</span>
       <div class="topbar-right">
         <button class="btn btn-primary" id="btn-add"></button>
@@ -26,7 +26,7 @@
     <div class="content">
       <div class="notice">
         <span id="ico-notice"></span>
-        <span>
+        <span id="notice-text">
           <b>Admin</b> changes settings and manages the team.
           <b>Analyst</b> can mitigate and work incidents.
           <b>Viewer</b> can read everything and change nothing.
@@ -57,7 +57,7 @@
         </div>
       </section>
 
-      <section class="panel" id="audit-panel">
+      <section class="panel" id="audit-panel" data-requires-feature="audit_log">
         <div class="panel-head">
           <span class="panel-title">Audit trail</span>
           <div class="right"><span class="pill" style="height:24px;font-size:10.5px">who did what</span></div>
@@ -123,9 +123,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js"></script>
-<script src="assets/js/api.js"></script>
-<script src="assets/js/ui.js"></script>
-<script src="assets/js/team.js"></script>
+<script src="assets/js/config.js?v=20260826"></script>
+<script src="assets/js/api.js?v=20260826"></script>
+<script src="assets/js/ui.js?v=20260826"></script>
+<script src="assets/js/team.js?v=20260826"></script>
 </body>
 </html>

@@ -71,12 +71,17 @@
         { label: "Live Overview", href: "index.html", key: "dashboard", icon: "activity" },
         { label: "Alerts & Incidents", href: "alerts.html", key: "alerts", icon: "alert" },
         { label: "Traffic Analysis", href: "traffic.html", key: "traffic", icon: "globe" },
+        { label: "Baseline & Anomalies", href: "baseline.html", key: "baseline", icon: "chart" },
         { label: "Network Nodes", href: "nodes.html", key: "nodes", icon: "router" }
       ]
     },
     {
       label: "Analysis", key: "analysis", icon: "chart", open: true, items: [
-        { label: "Model Performance", href: "model.html", key: "model", icon: "cpu" },
+        // Detection tuning is a job someone owns in a company. In a household
+        // there is nobody to own it, and exposing a threshold slider next to a
+        // confusion matrix invites breaking detection by fiddling.
+        { label: "Model Performance", href: "model.html", key: "model",
+          icon: "cpu", feature: "model_tuning" },
         { label: "Reports", href: "reports.html", key: "reports", icon: "file" }
       ]
     }
@@ -89,6 +94,90 @@
     { label: "Documentation", href: "https://github.com/vertigo-10/The_larpers_v2#readme", key: "docs", icon: "book", external: true }
   ];
 
+  /**
+   * The company/consumer choice made at signup is not cosmetic everywhere,
+   * but in the shared chrome it mostly is: same pages, same permissions,
+   * different words for who's using it. Centralized here so every page pulls
+   * from one source rather than each hand-rolling its own copy branch.
+   */
+  const ORG_COPY = {
+    company: {
+      nodesNav: "Network Nodes",
+      teamNav: "Team",
+      nodesTitle: "Network Nodes",
+      nodesCrumb: "monitored links",
+      nodesNotice: "Nodes are the collection points flows are attributed to. " +
+        "Throughput and attack counts cover the last five minutes. A node " +
+        "turns amber once more than eight flagged flows arrive from it in " +
+        "that window.",
+      teamTitle: "Team",
+      teamCrumb: "organisation",
+      teamNotice: "<b>Admin</b> changes settings and manages the team. " +
+        "<b>Analyst</b> can mitigate and work incidents. <b>Viewer</b> can " +
+        "read everything and change nothing. Members only ever see data " +
+        "belonging to this organisation."
+    },
+    consumer: {
+      nodesNav: "My Devices",
+      teamNav: "Household",
+      nodesTitle: "My Devices",
+      nodesCrumb: "things on your network",
+      nodesNotice: "Each entry is a device or group of devices your traffic " +
+        "is attributed to — starting with your router. Point the collector " +
+        "at a device and it appears here automatically the first time it " +
+        "sends traffic. A device turns amber once more than eight flagged " +
+        "flows arrive from it in five minutes.",
+      teamTitle: "Household",
+      teamCrumb: "household",
+      teamNotice: "<b>Admin</b> changes settings and manages who's in the " +
+        "household. <b>Analyst</b> can mitigate and work incidents. " +
+        "<b>Viewer</b> can read everything and change nothing. Everyone " +
+        "here only ever sees this household's own data."
+    }
+  };
+
+  /** Copy for the given org type, falling back to the company wording. */
+  function orgCopy(orgType) {
+    return ORG_COPY[orgType] || ORG_COPY.company;
+  }
+
+  /** Relabel the parts of the shared chrome that read differently per org type. */
+  function applyOrgProfile(orgType) {
+    const copy = orgCopy(orgType);
+    document.body.setAttribute("data-org-type", orgType || "company");
+    const nodesLink = document.querySelector('.nav-sub a[href="nodes.html"] span');
+    if (nodesLink) nodesLink.textContent = copy.nodesNav;
+    const teamLink = document.querySelector('.nav-item[href="team.html"] span');
+    if (teamLink) teamLink.textContent = copy.teamNav;
+  }
+
+  /**
+   * Hide anything this account type does not have.
+   *
+   * Markup opts in with `data-requires-feature="name"`, so adding a gated
+   * element is a one-attribute change and no new branch here. `data-feature-*`
+   * attributes on <body> additionally let CSS react without any JS.
+   *
+   * Removed from the DOM rather than merely `display:none`, because a hidden
+   * control is still tabbable, still reachable by a querySelector, and still
+   * looks to a reader like it might be the security boundary. It is not — the
+   * API enforces the same table — but leaving inert controls in the tree is
+   * how a hidden button eventually gets mistaken for a permission.
+   */
+  function applyFeatureGates(featureMap) {
+    if (!featureMap) return;
+    Object.keys(featureMap).forEach((name) => {
+      document.body.setAttribute(
+        `data-feature-${name.replace(/_/g, "-")}`,
+        featureMap[name] ? "on" : "off"
+      );
+    });
+    document.querySelectorAll("[data-requires-feature]").forEach((el) => {
+      const needed = el.getAttribute("data-requires-feature");
+      if (!featureMap[needed]) el.remove();
+    });
+  }
+
   function mountSidebar(activeKey) {
     const el = document.getElementById("sidebar");
     if (!el) return;
@@ -97,7 +186,8 @@
       const hasActive = g.items.some((i) => i.key === activeKey);
       const open = hasActive || g.open;
       const subs = g.items.map((i) => `
-        <a href="${i.href}" class="${i.key === activeKey ? "is-active" : ""}">
+        <a href="${i.href}" class="${i.key === activeKey ? "is-active" : ""}"
+           ${i.feature ? `data-requires-feature="${esc(i.feature)}"` : ""}>
           ${icon(i.icon, 12)}<span>${esc(i.label)}</span>
         </a>`).join("");
       return `
@@ -193,13 +283,17 @@
     const api = window.SENTRY_API;
     if (!api) return;
     try {
-      const [status, user] = await Promise.all([api.getStatus(), api.me()]);
+      const [status, user, featureSet] = await Promise.all([
+        api.getStatus(), api.me(), api.features(),
+      ]);
       const model = document.getElementById("sb-model");
       const acc = document.getElementById("sb-accuracy");
       const org = document.getElementById("sb-org");
 
       if (model) model.textContent = status.model_name || "model";
       if (org) org.textContent = user.org_name || "";
+      applyOrgProfile(user.org_type);
+      applyFeatureGates(featureSet && featureSet.features);
 
       if (acc) {
         if (!status.model_ready) {
@@ -333,6 +427,7 @@
 
   window.SENTRY_UI = {
     icon, esc, mountSidebar, setStreamState, toast, fmt,
-    classMeta, severityMeta, fatalBanner, clearFatal, ICONS
+    classMeta, severityMeta, fatalBanner, clearFatal, ICONS,
+    orgCopy, applyOrgProfile, applyFeatureGates
   };
 })();

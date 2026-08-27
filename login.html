@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
 </head>
 <body class="auth">
 <div class="auth-card">
@@ -22,7 +22,17 @@
   <div class="auth-title">Sign in</div>
   <div class="auth-sub">Access your organisation's live network monitoring.</div>
 
-  <form class="auth-form" id="login-form" novalidate>
+  <!--
+    method="post" is load-bearing, not decoration. auth.js calls
+    preventDefault() and posts via fetch, so this form should never submit
+    natively — but "should never" is not "cannot". If a script fails to load,
+    throws before it attaches the listener, or the user hits Enter during that
+    window, the browser submits the form itself. With the default method=get
+    that puts the plaintext password in the URL, and from there into browser
+    history, the server access log, and any Referer header. POST keeps
+    credentials in a body that nothing routinely records.
+  -->
+  <form class="auth-form" id="login-form" method="post" action="login.html" novalidate>
     <div class="form-error" id="err"></div>
 
     <div class="field">
@@ -45,9 +55,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js"></script>
-<script src="assets/js/api.js"></script>
-<script src="assets/js/ui.js"></script>
-<script src="assets/js/auth.js"></script>
+<script src="assets/js/config.js?v=20260826"></script>
+<script src="assets/js/api.js?v=20260826"></script>
+<script src="assets/js/ui.js?v=20260826"></script>
+<script src="assets/js/auth.js?v=20260826"></script>
 </body>
 </html>

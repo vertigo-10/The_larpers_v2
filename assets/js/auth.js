@@ -82,6 +82,30 @@
     const pw = document.getElementById("password");
     const hint = document.getElementById("pw-hint");
 
+    // Org-type picker: two cards, one selected at a time, feeding a hidden
+    // input so the rest of the form logic doesn't need to know about it.
+    const picker = document.getElementById("org-type-picker");
+    const orgTypeInput = document.getElementById("org_type");
+    const orgNameLabel = document.getElementById("org_name-label");
+    const orgNameField = document.getElementById("org_name");
+    const ORG_TYPE_COPY = {
+      company: { label: "Organisation name", placeholder: "Acme Networks" },
+      consumer: { label: "Household name", placeholder: "The Mekat House" }
+    };
+    if (picker) {
+      picker.querySelectorAll("[data-org-type]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          picker.querySelectorAll("[data-org-type]").forEach((b) => b.classList.remove("selected"));
+          btn.classList.add("selected");
+          const type = btn.getAttribute("data-org-type");
+          orgTypeInput.value = type;
+          const copy = ORG_TYPE_COPY[type] || ORG_TYPE_COPY.company;
+          orgNameLabel.textContent = copy.label;
+          orgNameField.placeholder = copy.placeholder;
+        });
+      });
+    }
+
     // Live feedback that mirrors the server's rule, so the failure is caught
     // before a round trip rather than after.
     pw.addEventListener("input", () => {
@@ -102,6 +126,7 @@
       e.preventDefault();
       const data = {
         org_name: document.getElementById("org_name").value.trim(),
+        org_type: orgTypeInput ? orgTypeInput.value : "company",
         name: document.getElementById("name").value.trim(),
         email: document.getElementById("email").value.trim(),
         password: pw.value

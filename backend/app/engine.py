@@ -21,12 +21,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import SessionLocal
 from .ml.infer import get_detector
-from .models import Flow, Incident, IncidentStatus, MetricPoint, Node, Org, OrgSettings
+from .models import (
+    Anomaly, AuditLog, Flow, Incident, IncidentStatus, MetricPoint, Node, Org,
+    OrgSettings, OrgType,
+)
 
 # Correlate flows from one source into a single incident for this long.
 INCIDENT_WINDOW = timedelta(minutes=10)
@@ -34,7 +38,7 @@ INCIDENT_WINDOW = timedelta(minutes=10)
 # The model's "benign" class. Everything else is treated as an attack.
 BENIGN = "normal"
 
-DEFAULT_NODES = [
+DEFAULT_NODES_COMPANY = [
     ("EDGE-01", "Core edge router"),
     ("EDGE-02", "Failover edge router"),
     ("DC-LB-01", "Datacenter load balancer"),
@@ -43,6 +47,17 @@ DEFAULT_NODES = [
     ("DB-TIER", "Database subnet"),
     ("CDN-POP", "CDN point of presence"),
     ("IOT-SEG", "IoT segment"),
+]
+
+# A household does not have datacenter tiers or a VPN gateway — seeding those
+# would misrepresent what a consumer profile is actually watching. This is
+# also the set a real deployment starts from: the collector agent posts flows
+# tagged with whatever node name you give it, and any name that does not
+# already exist here is added automatically (see `_ensure_node` below).
+DEFAULT_NODES_CONSUMER = [
+    ("HOME-ROUTER", "Your router — the edge of your home network"),
+    ("IOT-DEVICES", "Smart home and IoT devices"),
+    ("PERSONAL-DEVICES", "Laptops, phones and tablets"),
 ]
 
 
@@ -204,6 +219,11 @@ def process_flows(
     now = datetime.now(timezone.utc)
     out: List[Dict] = []
 
+    # Only real traffic can name a node the org has not seen before — the
+    # simulator's flows always carry one of the pre-seeded demo labels, so
+    # skipping it there avoids a redundant existence check on every tick.
+    seen_nodes: Set[str] = set()
+
     for raw, (label, confidence, _probs) in zip(raw_flows, results):
         duration = max(float(raw.get("duration", 0.0)), 1e-3)
         total_bytes = float(raw.get("total_bytes") or 0.0)
@@ -237,8 +257,17 @@ def process_flows(
         )
         db.add(flow)
 
+        if source == "live" and flow.node not in seen_nodes:
+            seen_nodes.add(flow.node)
+            _ensure_node(db, org_id, flow.node)
+
+        # Computed for every flow, not just attacks, so the payload shape is
+        # uniform — a benign flow is simply "low". The browser filters
+        # notifications against the org's min_severity using this field.
+        sev = severity_for(label, confidence, bps)
+
         if is_attack:
-            _correlate_incident(db, org_id, flow, confidence, bps, now)
+            _correlate_incident(db, org_id, flow, confidence, bps, now, sev)
 
         out.append({
             "id": flow.flow_ref,
@@ -252,6 +281,7 @@ def process_flows(
             "bytes_per_sec": round(bps, 1),
             "prediction": label,
             "confidence": round(confidence, 4),
+            "severity": sev,
             "mitigated": mitigated,
             "source": source,
         })
@@ -261,9 +291,20 @@ def process_flows(
 
 
 def _correlate_incident(
-    db: Session, org_id: int, flow: Flow, confidence: float, bps: float, now: datetime
+    db: Session,
+    org_id: int,
+    flow: Flow,
+    confidence: float,
+    bps: float,
+    now: datetime,
+    sev: str,
 ) -> None:
-    """Attach the flow to an open incident from the same source, or open one."""
+    """Attach the flow to an open incident from the same source, or open one.
+
+    `sev` is computed by the caller rather than here because the flow payload
+    sent to the browser needs the same value; passing it in keeps the incident
+    severity and the severity the UI sees from drifting apart.
+    """
     cutoff = now - INCIDENT_WINDOW
     stmt = (
         select(Incident)
@@ -278,7 +319,6 @@ def _correlate_incident(
         .limit(1)
     )
     incident = db.execute(stmt).scalar_one_or_none()
-    sev = severity_for(flow.prediction, confidence, bps)
 
     if incident is None:
         incident = Incident(
@@ -311,17 +351,50 @@ def _correlate_incident(
 
 
 # ── org bootstrap ─────────────────────────────────────────────────────────
-def ensure_org_defaults(db: Session, org_id: int) -> None:
+def ensure_org_defaults(db: Session, org_id: int, org_type: str = OrgType.company.value) -> None:
     if db.get(OrgSettings, org_id) is None:
         db.add(OrgSettings(org_id=org_id, threshold=settings.default_threshold))
     existing = db.execute(
         select(func.count(Node.id)).where(Node.org_id == org_id)
     ).scalar_one()
     if not existing:
-        for label, desc in DEFAULT_NODES:
+        nodes = DEFAULT_NODES_CONSUMER if org_type == OrgType.consumer.value else DEFAULT_NODES_COMPANY
+        for label, desc in nodes:
             db.add(Node(org_id=org_id, label=label, description=desc,
                         mbps=random.uniform(120, 520)))
     db.commit()
+
+
+def _ensure_node(db: Session, org_id: int, label: str) -> None:
+    """Register a node the first time a flow names it.
+
+    A real collector is pointed at whatever it is watching and tags its flows
+    with `--node <name>`, which will not match any of the demo nodes seeded at
+    signup. Without this, that traffic is scored and stored correctly but the
+    Nodes page — which only lists rows from the `nodes` table — never shows
+    it, so a real deployment looks empty even while it is working. This is
+    also why the empty-state copy on that page already promises "nodes appear
+    as flows arrive that name them": that was the intended behavior, just not
+    wired up.
+    """
+    if not label or label == "unknown":
+        return
+    exists = db.execute(
+        select(Node.id).where(Node.org_id == org_id, Node.label == label)
+    ).scalar_one_or_none()
+    if exists is not None:
+        return
+    # Two collectors can both introduce the same brand-new label within the
+    # same few hundred milliseconds, and the (org_id, label) unique
+    # constraint would then reject the second insert at commit time and take
+    # the whole ingest batch down with it. A savepoint scopes that failure to
+    # just this one row: lose the race, and the label is already there.
+    try:
+        with db.begin_nested():
+            db.add(Node(org_id=org_id, label=label,
+                        description="Detected from live traffic", mbps=0.0))
+    except IntegrityError:
+        pass
 
 
 # ── background loop ───────────────────────────────────────────────────────
@@ -338,21 +411,80 @@ def _generator_for(db: Session, org_id: int) -> FlowGenerator:
     return _generators[org_id]
 
 
-def _trim(db: Session, org_id: int) -> None:
-    """Keep the flow table bounded. Incidents are the durable record."""
+def _trim_table(db: Session, model, org_id: int, keep: int) -> int:
+    """Drop the oldest rows of one table for one org beyond `keep`.
+
+    Deletes by explicit id list rather than a correlated subquery because
+    MySQL cannot delete from a table it is selecting from in the same
+    statement, and the id list is bounded by `excess` anyway.
+    """
+    if keep <= 0:
+        return 0
     total = db.execute(
-        select(func.count(Flow.id)).where(Flow.org_id == org_id)
+        select(func.count(model.id)).where(model.org_id == org_id)
     ).scalar_one()
-    excess = total - settings.retain_flows
+    excess = total - keep
     if excess <= 0:
-        return
+        return 0
     old_ids = db.execute(
-        select(Flow.id).where(Flow.org_id == org_id)
-        .order_by(Flow.ts.asc()).limit(excess)
+        select(model.id).where(model.org_id == org_id)
+        .order_by(model.ts.asc()).limit(excess)
     ).scalars().all()
-    if old_ids:
-        db.execute(delete(Flow).where(Flow.id.in_(old_ids)))
+    if not old_ids:
+        return 0
+    db.execute(delete(model).where(model.id.in_(old_ids)))
+    return len(old_ids)
+
+
+def _trim(db: Session, org_id: int) -> None:
+    """Keep the append-only tables bounded. Incidents are the durable record.
+
+    This used to cover flows only, and only ran inside the simulator branch of
+    the engine loop — so the one deployment that actually needed it, a real one
+    with the simulator off and a live collector feeding it, never trimmed
+    anything at all. Metric points, anomalies and audit entries were never
+    trimmed in any mode. All four are append-only and written on a timer, so
+    the failure mode was a disk that filled silently.
+    """
+    removed = 0
+    removed += _trim_table(db, Flow, org_id, settings.retain_flows)
+    removed += _trim_table(db, MetricPoint, org_id, settings.retain_metrics)
+    removed += _trim_table(db, Anomaly, org_id, settings.retain_anomalies)
+    removed += _trim_table(db, AuditLog, org_id, settings.retain_audit)
+    if removed:
         db.commit()
+
+
+def retention_pass() -> int:
+    """Trim every org once. Returns the number of orgs processed."""
+    db = SessionLocal()
+    try:
+        org_ids = list(db.execute(select(Org.id)).scalars())
+        for org_id in org_ids:
+            _trim(db, org_id)
+        return len(org_ids)
+    finally:
+        db.close()
+
+
+async def retention_loop() -> None:
+    """Retention runs on its own clock, independent of the simulator.
+
+    Deliberately not folded back into engine_loop: that loop only does work
+    when the simulator is enabled, and retention is needed precisely when it
+    is not.
+    """
+    interval = max(settings.retention_interval_s, 10)
+    while not _stop.is_set():
+        try:
+            await asyncio.wait_for(_stop.wait(), timeout=interval)
+            return  # stop requested
+        except asyncio.TimeoutError:
+            pass
+        try:
+            retention_pass()
+        except Exception as exc:  # noqa: BLE001 - never let the loop die silently
+            print(f"[sentry] retention pass failed: {exc}")
 
 
 async def engine_loop() -> None:
@@ -394,8 +526,6 @@ async def engine_loop() -> None:
                         })
 
                         tick += 1
-                        if tick % 200 == 0:
-                            _trim(db, org_id)
                 finally:
                     db.close()
         except Exception as exc:  # noqa: BLE001 - never let the loop die silently

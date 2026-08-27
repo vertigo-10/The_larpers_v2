@@ -16,6 +16,10 @@ class SignupIn(BaseModel):
     password: str = Field(min_length=12, max_length=200)
     name: str = Field(min_length=1, max_length=120)
     org_name: str = Field(min_length=1, max_length=120)
+    # Picks the default node topology and a handful of nav/page labels. Required
+    # rather than defaulted so a signing-up user makes the choice once, on
+    # purpose, instead of it being silently assumed.
+    org_type: str = Field(pattern="^(company|consumer)$")
 
     @field_validator("name", "org_name")
     @classmethod
@@ -41,6 +45,7 @@ class UserOut(BaseModel):
     is_active: bool
     org_id: int
     org_name: str
+    org_type: str
     created_at: datetime
     last_login_at: Optional[datetime] = None
 
@@ -296,6 +301,54 @@ class TrafficBreakdownOut(BaseModel):
     window_minutes: int
     protocols: List[ProtocolRowOut]
     ports: List[PortRowOut]
+
+
+class AnomalyOut(BaseModel):
+    """An aggregate deviation from the learned baseline.
+
+    `expected` is what the baseline predicted for this time of week, not a
+    configured threshold — the difference matters, because it is why a busy
+    Monday morning does not read as an attack.
+    """
+
+    id: int
+    ts: int
+    last_seen_at: int
+    metric: str
+    metric_label: str
+    direction: str          # spike | drop
+    observed: float
+    expected: float
+    deviation: float        # signed z-score
+    peak_deviation: float
+    severity: str
+    windows: int
+    status: str
+    acknowledged_by: Optional[str] = None
+
+
+class BaselineSlotOut(BaseModel):
+    bucket: int
+    label: str
+    metric: str
+    mean: float
+    sigma: float
+    samples: int
+    ready: bool
+
+
+class BaselineOut(BaseModel):
+    """The learned profile plus how much of it is trustworthy yet.
+
+    `warmth` exists so the dashboard can say "still learning" rather than
+    showing an empty anomaly list as though the network were verified clean.
+    """
+
+    window_seconds: int
+    z_threshold: float
+    warmth: Dict
+    slots: List[BaselineSlotOut]
+    current: Dict
 
 
 class SummaryOut(BaseModel):

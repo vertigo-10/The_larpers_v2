@@ -27,6 +27,11 @@
     el("topbar-avatar").textContent = user.initials || "··";
     el("topbar-avatar").title = `${user.name} · ${user.role}`;
 
+    const copy = ui.orgCopy(user.org_type);
+    el("page-title").textContent = copy.nodesTitle;
+    el("crumb").textContent = `/ ${copy.nodesCrumb}`;
+    el("notice-text").textContent = copy.nodesNotice;
+
     await load();
     api.on("status", ui.setStreamState);
     api.connectStream();

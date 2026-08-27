@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260826" />
 </head>
 <body class="auth">
 <div class="auth-card">
@@ -25,11 +25,28 @@
     organisation — no other tenant can see it.
   </div>
 
-  <form class="auth-form" id="signup-form" novalidate>
+  <!-- method="post" for the same reason as login.html: a native submit must
+       never be able to put the chosen password into a query string. -->
+  <form class="auth-form" id="signup-form" method="post" action="signup.html" novalidate>
     <div class="form-error" id="err"></div>
 
     <div class="field">
-      <label for="org_name">Organisation name</label>
+      <label>What are you protecting?</label>
+      <div class="org-type-picker" id="org-type-picker">
+        <button type="button" class="org-type-opt selected" data-org-type="company">
+          <span class="t">A company or team network</span>
+          <span class="d">Multiple sites/nodes, a team with roles, an audit trail.</span>
+        </button>
+        <button type="button" class="org-type-opt" data-org-type="consumer">
+          <span class="t">My home network</span>
+          <span class="d">Your router and devices — simple, single-network setup.</span>
+        </button>
+      </div>
+      <input type="hidden" id="org_type" name="org_type" value="company" />
+    </div>
+
+    <div class="field">
+      <label for="org_name" id="org_name-label">Organisation name</label>
       <input type="text" id="org_name" name="org_name" required
              maxlength="120" placeholder="Acme Networks" />
     </div>
@@ -61,9 +78,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js"></script>
-<script src="assets/js/api.js"></script>
-<script src="assets/js/ui.js"></script>
-<script src="assets/js/auth.js"></script>
+<script src="assets/js/config.js?v=20260826"></script>
+<script src="assets/js/api.js?v=20260826"></script>
+<script src="assets/js/ui.js?v=20260826"></script>
+<script src="assets/js/auth.js?v=20260826"></script>
 </body>
 </html>
