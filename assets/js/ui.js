@@ -180,6 +180,21 @@
     return ORG_COPY[orgType] || ORG_COPY.company;
   }
 
+  /**
+   * Drop nav groups left with nothing in them.
+   *
+   * Called from both gate passes rather than one, because they remove
+   * different things: `only:` entries go in applyOrgProfile and `feature:`
+   * entries in applyFeatureGates. Pruning after only the first left the
+   * consumer sidebar with an "Analysis" header that opened onto nothing —
+   * its last child was feature-gated and had not been removed yet.
+   */
+  function pruneEmptyNavGroups() {
+    document.querySelectorAll(".nav-group").forEach((group) => {
+      if (!group.querySelector(".nav-sub a")) group.remove();
+    });
+  }
+
   /** Relabel the parts of the shared chrome that read differently per org type. */
   function applyOrgProfile(orgType) {
     const copy = orgCopy(orgType);
@@ -193,11 +208,7 @@
     document.querySelectorAll("[data-org-only]").forEach((el) => {
       if (el.getAttribute("data-org-only") !== type) el.remove();
     });
-    // A group whose every child just disappeared would otherwise render as a
-    // header that expands into nothing.
-    document.querySelectorAll(".nav-group").forEach((group) => {
-      if (!group.querySelector(".nav-sub a")) group.remove();
-    });
+    pruneEmptyNavGroups();
 
     // Only the team link needs relabelling now. Nodes and alerts are separate
     // NAV entries per account type, each already carrying its own wording, so
@@ -231,6 +242,7 @@
       const needed = el.getAttribute("data-requires-feature");
       if (!featureMap[needed]) el.remove();
     });
+    pruneEmptyNavGroups();
   }
 
   function mountSidebar(activeKey) {
