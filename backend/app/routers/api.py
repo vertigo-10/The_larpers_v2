@@ -17,7 +17,9 @@ from .. import __version__
 from .. import baseline as bl
 from ..config import settings
 from ..db import get_db
-from ..engine import BENIGN, manager, process_flows, severity_for
+from ..engine import (
+    BENIGN, manager, process_flows, record_metric_point, severity_for,
+)
 from ..ml.infer import get_detector
 from ..models import (
     Anomaly,
@@ -300,10 +302,18 @@ def ingest(
     scored = process_flows(db, caller.org_id, raw, source="live")
     elapsed_ms = (time.perf_counter() - started) * 1000.0
 
+    # Without this the throughput and threat charts only ever populated from
+    # the simulator, so a real deployment scored traffic correctly and showed
+    # empty graphs. process_flows already committed the flows; this needs its
+    # own commit.
+    point = record_metric_point(db, caller.org_id, scored)
+    db.commit()
+
     return {
         "ok": True,
         "count": len(scored),
         "inference_ms": round(elapsed_ms / max(len(scored), 1), 3),
+        "metric": point,
         "flows": scored,
     }
 

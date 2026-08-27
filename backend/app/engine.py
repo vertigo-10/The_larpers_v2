@@ -503,14 +503,7 @@ async def engine_loop() -> None:
                         batch = gen.tick(n=random.randint(1, 3))
                         scored = process_flows(db, org_id, batch, "simulated")
 
-                        threat = _threat_score(scored)
-                        throughput = sum(f["bytes_per_sec"] for f in scored) * 8 / 1e6
-                        db.add(MetricPoint(
-                            org_id=org_id,
-                            throughput=round(throughput, 2),
-                            threat=round(threat, 1),
-                            flows=len(scored),
-                        ))
+                        point = record_metric_point(db, org_id, scored)
                         db.commit()
 
                         for f in scored:
@@ -519,8 +512,8 @@ async def engine_loop() -> None:
                             "type": "metric",
                             "data": {
                                 "ts": int(time.time() * 1000),
-                                "throughput": round(throughput, 2),
-                                "threat": round(threat, 1),
+                                "throughput": point["throughput"],
+                                "threat": point["threat"],
                                 "phase": gen.phase,
                             },
                         })
@@ -537,16 +530,50 @@ async def engine_loop() -> None:
             pass
 
 
-def _threat_score(scored: List[Dict]) -> float:
-    """0–100 threat level for a batch, weighted by confidence."""
+def threat_score(scored: List[Dict]) -> float:
+    """0–100 threat level for a batch, weighted by confidence.
+
+    A batch with no detections scores exactly zero. It used to return
+    random.uniform(1.0, 8.0), which put a permanent flickering floor under the
+    headline number on an idle network — the same failure as the mock-data
+    fallback this project already removed: inventing signal where there is
+    none. An operator needs "quiet" to look unmistakably different from "low
+    but real", and a jittering 1-to-8 makes that impossible.
+    """
     if not scored:
         return 0.0
     attack = [f for f in scored if f["prediction"] != BENIGN]
     if not attack:
-        return random.uniform(1.0, 8.0)
+        return 0.0
     ratio = len(attack) / len(scored)
     mean_conf = sum(f["confidence"] for f in attack) / len(attack)
     return min(100.0, 100.0 * ratio * mean_conf * (1.0 + 0.15 * math.log1p(len(attack))))
+
+
+def record_metric_point(db: Session, org_id: int, scored: List[Dict]) -> Dict:
+    """Persist one throughput/threat sample for a scored batch.
+
+    Shared by the simulator loop and the live /api/ingest path. Previously only
+    the simulator wrote MetricPoint rows, so a real deployment fed by a
+    collector agent scored and stored flows correctly but left the throughput
+    and threat charts permanently empty — the graphs worked in the demo and
+    nowhere else. Same shape of bug as retention living inside the simulator
+    branch.
+
+    Does not commit; the caller owns the transaction.
+    """
+    if not scored:
+        return {"throughput": 0.0, "threat": 0.0, "flows": 0}
+
+    threat = threat_score(scored)
+    throughput = sum(f["bytes_per_sec"] for f in scored) * 8 / 1e6  # Mb/s
+    point = {
+        "throughput": round(throughput, 2),
+        "threat": round(threat, 1),
+        "flows": len(scored),
+    }
+    db.add(MetricPoint(org_id=org_id, **point))
+    return point
 
 
 def stop_engine() -> None:

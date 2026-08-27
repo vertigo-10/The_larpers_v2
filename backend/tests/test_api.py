@@ -309,6 +309,62 @@ def test_ingest_scores_with_real_model(client, org_a):
     assert flows[0]["confidence"] > 0.5
 
 
+def test_quiet_traffic_scores_zero_threat():
+    """
+    A batch with no detections must score exactly 0, not a small random
+    number. The old implementation returned random.uniform(1.0, 8.0), which
+    put a flickering floor under the headline threat gauge on an idle network
+    and made "quiet" indistinguishable from "low but real".
+    """
+    from backend.app.engine import threat_score
+
+    benign = [
+        {"prediction": "normal", "confidence": 0.99, "bytes_per_sec": 1000.0},
+        {"prediction": "normal", "confidence": 0.97, "bytes_per_sec": 2000.0},
+    ]
+    # Deterministic across repeats — the old version would vary each call.
+    assert [threat_score(benign) for _ in range(5)] == [0.0] * 5
+    assert threat_score([]) == 0.0
+
+
+def test_attack_traffic_scores_above_zero():
+    """Anchors the test above: zero must mean "nothing found", not "broken"."""
+    from backend.app.engine import threat_score
+
+    attack = [
+        {"prediction": "dos_ddos", "confidence": 0.98, "bytes_per_sec": 5e6},
+        {"prediction": "dos_ddos", "confidence": 0.95, "bytes_per_sec": 4e6},
+    ]
+    assert threat_score(attack) > 0.0
+
+
+def test_live_ingest_records_a_metric_point(client, org_a):
+    """
+    MetricPoint rows used to be written only by the simulator loop, so a real
+    deployment fed by a collector scored flows correctly and showed empty
+    throughput/threat charts. Ingesting must move the history forward.
+    """
+    # /metrics/history returns a SeriesOut object, not a list — len() on the
+    # response would count its three keys and never change.
+    def history_len():
+        body = client.get("/api/metrics/history?points=500",
+                          cookies=org_a["cookies"]).json()
+        return len(body["labels"])
+
+    before = history_len()
+
+    r = client.post("/api/ingest", cookies=org_a["cookies"], json={"flows": [
+        {"src_ip": "198.51.100.7", "dst_port": 443, "protocol": "TCP",
+         "node": "EDGE-01", "duration": 8.0, "packets": 200,
+         "total_bytes": 160_000},
+    ]})
+    assert r.status_code == 200, r.text
+    assert "metric" in r.json(), "ingest should report the sample it recorded"
+    assert r.json()["metric"]["flows"] == 1
+
+    assert history_len() == before + 1, "ingest did not persist a metric point"
+
+
 def test_attack_opens_an_incident(client, org_a):
     r = client.get("/api/incidents", cookies=org_a["cookies"])
     assert r.status_code == 200
