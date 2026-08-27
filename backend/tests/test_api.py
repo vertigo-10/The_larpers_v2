@@ -448,6 +448,18 @@ def test_admin_can_mitigate(client, org_a):
     assert r.json()["enforced"] is False
 
 
+def test_mitigating_a_source_closes_out_its_incident(client, org_a):
+    """The incident must follow its flows, or the UI contradicts itself.
+
+    Both consoles decide whether a row still needs a human by reading
+    `mitigated`. If mitigating a source flipped the flows but left the incident
+    alone, the page would confirm the block and then keep demanding it.
+    """
+    incidents = client.get("/api/incidents", cookies=org_a["cookies"]).json()
+    target = next(i for i in incidents if i["src_ip"] == "203.0.113.9")
+    assert target["mitigated"] is True
+
+
 # ── settings ──────────────────────────────────────────────────────────────
 def test_settings_roundtrip(client, org_a):
     r = client.patch("/api/settings", cookies=org_a["cookies"],

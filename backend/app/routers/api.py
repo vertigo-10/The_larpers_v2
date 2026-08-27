@@ -790,6 +790,29 @@ def mitigate(
     result = db.execute(stmt.values(mitigated=True))
     count = result.rowcount or 0
 
+    # An incident is nothing but a grouping of these flows, so leaving it
+    # untouched while its flows are all marked mitigated puts the UI in the
+    # position of confirming the action and then continuing to demand it: the
+    # consumer alerts page reads `mitigated` to decide whether a row still needs
+    # someone, and would keep the row open under a toast saying it was handled.
+    inc_stmt = update(Incident).where(
+        Incident.org_id == user.org_id,
+        Incident.status != IncidentStatus.resolved.value,
+    )
+    if body.flow_id:
+        inc_stmt = inc_stmt.where(
+            Incident.id.in_(
+                select(Flow.incident_id).where(
+                    Flow.org_id == user.org_id,
+                    Flow.flow_ref == body.flow_id,
+                    Flow.incident_id.is_not(None),
+                )
+            )
+        )
+    if body.src_ip:
+        inc_stmt = inc_stmt.where(Incident.src_ip == body.src_ip)
+    db.execute(inc_stmt.values(mitigated=True))
+
     target = body.flow_id or body.src_ip
     db.add(AuditLog(org_id=user.org_id, user_id=user.id, user_label=user.name,
                     action="flow.mitigated",

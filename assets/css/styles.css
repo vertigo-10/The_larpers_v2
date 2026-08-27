@@ -913,6 +913,23 @@ body.auth { overflow: auto; display: grid; place-items: center; min-height: 100v
 .plain-detail.show { display: block; }
 .plain-detail b { color: var(--muted); font-weight: 500; }
 
+/* Alerts folded into the device or day they belong to. Sans-serif on purpose
+   even though it sits inside the monospace detail panel: these rows are prose
+   the reader is meant to skim, not field values they are meant to compare. */
+.mini-list { margin-top: 10px; border-top: 1px solid var(--border-soft); padding-top: 8px; }
+.mini-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0; font-family: var(--sans); font-size: 11.5px;
+}
+.mini-row .what { color: var(--text); font-weight: 600; }
+.mini-row .dim { color: var(--muted); font-size: 11px; }
+.mini-row .chip, .mini-row .btn { margin-left: auto; flex-shrink: 0; }
+.btn-sm { height: 24px; padding: 0 10px; font-size: 11px; border-radius: 7px; }
+/* Disclosure and the block button share a line. The disclosure keeps its own
+   top margin from .disclose, so align on the baseline rather than stretching. */
+.row-actions { display: flex; align-items: center; gap: 12px; }
+.row-actions .disclose { margin-right: 0; }
+
 @media (max-width: 1280px) {
   .grid-top { grid-template-columns: minmax(0, 1fr); }
   .stat-strip { grid-template-columns: repeat(3, 1fr); }

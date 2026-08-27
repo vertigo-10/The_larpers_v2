@@ -3,24 +3,23 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Home — SENTRY NN</title>
+<title>My Devices — SENTRY NN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="assets/css/styles.css?v=20260827" />
 </head>
-<!-- Written for households. An enterprise account landing here is redirected
-     back by the guard in ui.js, because the answer this page gives — one
-     sentence about whether things are fine — is not the answer a security team
-     needs from a console. -->
+<!-- The household version of nodes.html. Same data underneath; the difference
+     is that this page leads with what a device has been doing rather than with
+     its throughput, and offers the one action a home user can actually take. -->
 <body data-org-scope="consumer">
 <div class="app">
   <aside class="sidebar" id="sidebar"></aside>
 
   <div class="main">
     <header class="topbar">
-      <h1>Home</h1>
-      <span class="crumb" id="crumb">/ your network</span>
+      <h1>My Devices</h1>
+      <span class="crumb" id="crumb">/ things on your network</span>
       <div class="topbar-right">
         <span class="pill" id="stream-pill"><span class="dot" id="stream-dot"></span> <span id="stream-text">Connecting</span></span>
         <button class="pill" id="btn-refresh"></button>
@@ -30,29 +29,21 @@
 
     <div class="content">
       <div class="page">
-        <!-- The verdict, in one sentence. Everything below it is the evidence. -->
-        <section class="home-hero" id="hero">
-          <div class="ring" id="hero-ring"></div>
-          <div>
-            <div class="verdict-line" id="hero-line">Checking your network…</div>
-            <div class="verdict-why" id="hero-why">One moment.</div>
-          </div>
-        </section>
+        <div class="notice">
+          <span id="ico-notice"></span>
+          <span>
+            Everything your traffic passes through, starting with your router.
+            A device appears here on its own the first time it sends anything.
+            Figures cover the last five minutes.
+          </span>
+        </div>
 
-        <div class="home-stats" id="home-stats"></div>
-
-        <section class="panel" style="margin-bottom:14px">
-          <div class="panel-head">
-            <span class="panel-title">What's happened recently</span>
-            <div class="right"><a class="pill" href="home-alerts.html" id="link-alerts">See everything</a></div>
-          </div>
-          <div class="plain-list" id="events"></div>
-        </section>
+        <div class="home-stats" id="device-stats"></div>
 
         <section class="panel">
           <div class="panel-head">
             <span class="panel-title">Your devices</span>
-            <div class="right"><a class="pill" href="home-devices.html" id="link-devices">Manage devices</a></div>
+            <div class="right"><a class="pill" href="home-alerts.html">See all alerts</a></div>
           </div>
           <div class="plain-list" id="devices"></div>
         </section>
@@ -64,6 +55,6 @@
 <script src="assets/js/config.js?v=20260827"></script>
 <script src="assets/js/api.js?v=20260827"></script>
 <script src="assets/js/ui.js?v=20260827"></script>
-<script src="assets/js/home.js?v=20260827"></script>
+<script src="assets/js/home-devices.js?v=20260827"></script>
 </body>
 </html>

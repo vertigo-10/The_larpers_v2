@@ -77,12 +77,18 @@
           icon: "home", only: "consumer" },
         { label: "Live Overview", href: "index.html", key: "dashboard",
           icon: "activity", only: "company" },
-        { label: "Alerts & Incidents", href: "alerts.html", key: "alerts", icon: "alert" },
+        { label: "Alerts & Incidents", href: "alerts.html", key: "alerts",
+          icon: "alert", only: "company" },
+        { label: "Alerts", href: "home-alerts.html", key: "alerts",
+          icon: "alert", only: "consumer" },
         { label: "Traffic Analysis", href: "traffic.html", key: "traffic",
           icon: "globe", only: "company" },
         { label: "Baseline & Anomalies", href: "baseline.html", key: "baseline",
           icon: "chart", only: "company" },
-        { label: "Network Nodes", href: "nodes.html", key: "nodes", icon: "router" }
+        { label: "Network Nodes", href: "nodes.html", key: "nodes",
+          icon: "router", only: "company" },
+        { label: "My Devices", href: "home-devices.html", key: "nodes",
+          icon: "router", only: "consumer" }
       ]
     },
     {
@@ -125,7 +131,6 @@
    */
   const ORG_COPY = {
     company: {
-      nodesNav: "Network Nodes",
       teamNav: "Team",
       nodesTitle: "Network Nodes",
       nodesCrumb: "monitored links",
@@ -147,7 +152,6 @@
         "this browser only."
     },
     consumer: {
-      nodesNav: "My Devices",
       teamNav: "Household",
       nodesTitle: "My Devices",
       nodesCrumb: "things on your network",
@@ -195,8 +199,9 @@
       if (!group.querySelector(".nav-sub a")) group.remove();
     });
 
-    const nodesLink = document.querySelector('.nav-sub a[href="nodes.html"] span');
-    if (nodesLink) nodesLink.textContent = copy.nodesNav;
+    // Only the team link needs relabelling now. Nodes and alerts are separate
+    // NAV entries per account type, each already carrying its own wording, so
+    // rewriting their text here would be a no-op that reads like it does work.
     const teamLink = document.querySelector('.nav-item[href="team.html"] span');
     if (teamLink) teamLink.textContent = copy.teamNav;
   }
@@ -502,9 +507,166 @@
     if (bar) bar.remove();
   }
 
+  // One entry per class the model can actually predict, and nothing else. A
+  // friendly line for a label that cannot occur reads as coverage the product
+  // does not have; unknown labels fall through to the honest default below.
+  //
+  // Lives here rather than on the home page because all three consumer screens
+  // describe the same incidents. Two copies would eventually word the same
+  // detection differently on two pages, and a household comparing them has no
+  // way to tell which one is the real answer.
+  const PLAIN_CLASS = {
+    dos_ddos: {
+      what: "A device was flooded with traffic",
+      sub: "Something sent far more connections than normal, which is how an " +
+           "attempt to knock a device offline looks."
+    },
+    scan: {
+      what: "Something was probing your network",
+      sub: "A device went door-to-door looking for open ports. On its own it " +
+           "is not damage, but it is usually what comes first."
+    }
+  };
+
+  function plainClass(label) {
+    return PLAIN_CLASS[label] || {
+      what: "Unusual activity",
+      sub: "This did not match how your network normally behaves."
+    };
+  }
+
+  /**
+   * Whether an incident is finished with, from the reader's point of view.
+   *
+   * Shared for the same reason as the copy above: the home banner and the event
+   * list once disagreed, which put a red "6 things need your attention"
+   * directly over six rows each marked "Dealt with". A home user who is told to
+   * act, looks, and finds nothing to do learns to stop reading the banner.
+   */
+  const isHandled = (i) => i.status === "resolved" || Boolean(i.mitigated);
+  const isSerious = (i) => i.severity === "critical" || i.severity === "high";
+
+  /**
+   * The one sentence at the top of a consumer page.
+   *
+   * Ordered worst-first, and the reason is always stated: "you're fine" with
+   * nothing behind it is indistinguishable from a broken page, which is the
+   * failure this product least wants to have.
+   *
+   * Shared by home and alerts. Someone who reads a red banner and clicks
+   * through to see the detail must not be met by a calmer sentence computed a
+   * different way — the discrepancy teaches them that one of the two screens is
+   * lying, and they have no way to tell which.
+   *
+   * Expects the standard hero markup: #hero, #hero-ring, #hero-line, #hero-why.
+   */
+  function renderVerdict(summary, incidents) {
+    const outstanding = incidents.filter((i) => !isHandled(i));
+    const serious = outstanding.filter(isSerious);
+    const handledSerious = incidents.filter((i) => isHandled(i) && isSerious(i));
+    const hero = document.getElementById("hero");
+    let tone, mark, line, why;
+
+    if (serious.length) {
+      tone = "is-bad";
+      mark = "alert";
+      // Says "serious" out loud because this counts only the critical and high
+      // ones, while the list underneath counts everything still outstanding.
+      // Without the word, the alerts page shows two different totals for what
+      // reads as the same sentence and the reader cannot tell which to believe.
+      line = serious.length === 1
+        ? "Something serious needs your attention"
+        : `${serious.length} serious things need your attention`;
+      why = "A device on your network is behaving the way an attack does. " +
+            "Open the alert below to see what it was and block it.";
+    } else if (outstanding.length) {
+      tone = "is-warn";
+      mark = "alert";
+      line = "Worth a look, but nothing urgent";
+      why = `${outstanding.length} thing${outstanding.length === 1 ? "" : "s"} ` +
+            `looked unusual and ${outstanding.length === 1 ? "has" : "have"} not ` +
+            `been dealt with yet. Nothing has been rated serious.`;
+    } else if (!summary.flows_per_min) {
+      // Told apart from "safe" on purpose. No traffic means nothing is being
+      // checked, and reporting that as green would be the single most
+      // misleading thing this page could do.
+      tone = "is-warn";
+      mark = "info";
+      line = "Not seeing any traffic";
+      why = "Nothing has been checked in the last minute, so this is not a " +
+            "clean bill of health — it means the collector is not sending. " +
+            "Check that it is running.";
+    } else if (handledSerious.length) {
+      // Green, because nothing is waiting on the reader — but it would be a lie
+      // to say the network "looks fine" on a day something tried to knock a
+      // device offline and got stopped. They should know it happened.
+      tone = "is-ok";
+      mark = "shieldCheck";
+      line = "Handled without you";
+      why = `${handledSerious.length} serious thing${handledSerious.length === 1 ? "" : "s"} ` +
+            `happened recently and ${handledSerious.length === 1 ? "was" : "were"} ` +
+            `blocked automatically. Nothing is waiting on you — the details are below.`;
+    } else {
+      tone = "is-ok";
+      mark = "shieldCheck";
+      line = "Your network looks fine";
+      why = `Everything crossing your router in the last minute was checked ` +
+            `and came back normal. ${fmt.num(summary.attacks_blocked)} ` +
+            `thing${summary.attacks_blocked === 1 ? " has" : "s have"} been ` +
+            `blocked in total.`;
+    }
+
+    hero.className = `home-hero ${tone}`;
+    document.getElementById("hero-ring").innerHTML = icon(mark, 28);
+    document.getElementById("hero-line").textContent = line;
+    document.getElementById("hero-why").textContent = why;
+  }
+
+  /**
+   * Record a decision to block a source, and be honest about what that buys.
+   *
+   * SENTRY reads a feed of flows. It does not sit in the path of the traffic
+   * and has no route to the router, so it cannot drop a packet. The API says so
+   * itself — /api/mitigate returns `enforced: false` and a note about wiring up
+   * an enforcement hook, and its docstring is explicit that it "does not pretend
+   * to have blocked traffic it cannot reach".
+   *
+   * A consumer button that said "Blocked" and stopped there would be the most
+   * dangerous copy in this product: someone reads it, believes the thing is
+   * stopped, and stops looking. So the boundary is stated before the click and
+   * the address that still needs blocking is repeated after it.
+   *
+   * The `enforced` flag is read back rather than assumed, so that connecting a
+   * real enforcement hook later upgrades this wording on its own instead of
+   * leaving the product permanently under-claiming what it does.
+   */
+  async function blockSource(srcIp) {
+    const proceed = window.confirm(
+      `Block ${srcIp}?\n\n` +
+      `SENTRY will mark everything from this address as dealt with, and it ` +
+      `will stop counting against your network's status.\n\n` +
+      `It cannot cut the connection itself — SENTRY watches your traffic, it ` +
+      `does not sit in the middle of it. To actually stop this, block ${srcIp} ` +
+      `in your router's settings.`
+    );
+    if (!proceed) return false;
+
+    const res = await window.SENTRY_API.mitigate(null, srcIp);
+    const n = res.count || 0;
+    toast(
+      res.enforced
+        ? `Blocked ${srcIp} at the network edge.`
+        : `Marked ${n} connection${n === 1 ? "" : "s"} from ${srcIp} as dealt ` +
+          `with. Block it on your router to stop it for real.`,
+      "ok"
+    );
+    return true;
+  }
+
   window.SENTRY_UI = {
     icon, esc, mountSidebar, setStreamState, toast, fmt,
     classMeta, severityMeta, fatalBanner, clearFatal, ICONS,
-    orgCopy, applyOrgProfile, applyFeatureGates, landingFor
+    orgCopy, applyOrgProfile, applyFeatureGates, landingFor,
+    plainClass, isHandled, isSerious, renderVerdict, blockSource
   };
 })();

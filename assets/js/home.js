@@ -53,98 +53,25 @@
 
   async function load() {
     try {
+      // The verdict is judged on the whole list and only the display is
+      // trimmed. Asking for the eight most recent and deciding from those said
+      // "nothing is waiting on you" whenever the newest eight happened to be
+      // handled, while nineteen older ones were still open and both other
+      // consumer pages said so — a green banner covering an unresolved network.
       const [summary, incidents, nodes] = await Promise.all([
         api.getSummary(),
-        api.getIncidents("all", 8),
+        api.getIncidents("all", 100),
         api.getNodes(),
       ]);
-      renderVerdict(summary, incidents);
+      ui.renderVerdict(summary, incidents);
       renderStats(summary, nodes);
-      renderEvents(incidents);
+      renderEvents(incidents.slice(0, 8));
       renderDevices(nodes);
       ui.clearFatal();
     } catch (err) {
       if (err && err.status === 401) return;
       ui.fatalBanner(err.message || "Could not load your network.");
     }
-  }
-
-  /**
-   * Whether an incident is finished with, from the reader's point of view.
-   *
-   * Shared by the verdict and the event list because the two disagreed: the
-   * banner counted anything not "resolved" while the list called a mitigated
-   * incident "Dealt with". With auto-mitigate on, that put a red "6 things need
-   * your attention" directly above six rows each marked "Dealt with" — and a
-   * home user who is told to act, looks, and finds nothing to do learns to stop
-   * reading the banner.
-   */
-  const isHandled = (i) => i.status === "resolved" || Boolean(i.mitigated);
-  const isSerious = (i) => i.severity === "critical" || i.severity === "high";
-
-  /**
-   * The one sentence at the top.
-   *
-   * Ordered worst-first, and the reason is always stated: "you're fine" with
-   * nothing behind it is indistinguishable from a broken page, which is the
-   * failure this product least wants to have.
-   */
-  function renderVerdict(summary, incidents) {
-    const outstanding = incidents.filter((i) => !isHandled(i));
-    const serious = outstanding.filter(isSerious);
-    const handledSerious = incidents.filter((i) => isHandled(i) && isSerious(i));
-    const hero = el("hero");
-    let tone, mark, line, why;
-
-    if (serious.length) {
-      tone = "is-bad";
-      mark = "alert";
-      line = serious.length === 1
-        ? "Something needs your attention"
-        : `${serious.length} things need your attention`;
-      why = `A device on your network is behaving the way an attack does. ` +
-            `Open the alert below to see what it was and block it.`;
-    } else if (outstanding.length) {
-      tone = "is-warn";
-      mark = "alert";
-      line = "Worth a look, but nothing urgent";
-      why = `${outstanding.length} thing${outstanding.length === 1 ? "" : "s"} ` +
-            `looked unusual and ${outstanding.length === 1 ? "has" : "have"} not ` +
-            `been dealt with yet. Nothing has been rated serious.`;
-    } else if (!summary.flows_per_min) {
-      // Told apart from "safe" on purpose. No traffic means nothing is being
-      // checked, and reporting that as green would be the single most
-      // misleading thing this page could do.
-      tone = "is-warn";
-      mark = "info";
-      line = "Not seeing any traffic";
-      why = "Nothing has been checked in the last minute, so this is not a " +
-            "clean bill of health — it means the collector is not sending. " +
-            "Check that it is running.";
-    } else if (handledSerious.length) {
-      // Green, because nothing is waiting on the reader — but it would be a lie
-      // to say the network "looks fine" on a day something tried to knock a
-      // device offline and got stopped. They should know it happened.
-      tone = "is-ok";
-      mark = "shieldCheck";
-      line = "Handled without you";
-      why = `${handledSerious.length} serious thing${handledSerious.length === 1 ? "" : "s"} ` +
-            `happened recently and ${handledSerious.length === 1 ? "was" : "were"} ` +
-            `blocked automatically. Nothing is waiting on you — the details are below.`;
-    } else {
-      tone = "is-ok";
-      mark = "shieldCheck";
-      line = "Your network looks fine";
-      why = `Everything crossing your router in the last minute was checked ` +
-            `and came back normal. ${fmt.num(summary.attacks_blocked)} ` +
-            `thing${summary.attacks_blocked === 1 ? " has" : "s have"} been ` +
-            `blocked in total.`;
-    }
-
-    hero.className = `home-hero ${tone}`;
-    el("hero-ring").innerHTML = icon(mark, 28);
-    el("hero-line").textContent = line;
-    el("hero-why").textContent = why;
   }
 
   function renderStats(summary, nodes) {
@@ -178,29 +105,6 @@
       </div>`).join("");
   }
 
-  // One entry per class the model can actually predict, and nothing else. A
-  // friendly line for a label that cannot occur reads as coverage the product
-  // does not have; unknown labels fall through to the honest default below.
-  const PLAIN = {
-    dos_ddos: {
-      what: "A device was flooded with traffic",
-      sub: "Something sent far more connections than normal, which is how an " +
-           "attempt to knock a device offline looks."
-    },
-    scan: {
-      what: "Something was probing your network",
-      sub: "A device went door-to-door looking for open ports. On its own it " +
-           "is not damage, but it is usually what comes first."
-    }
-  };
-
-  function plainFor(label) {
-    return PLAIN[label] || {
-      what: "Unusual activity",
-      sub: "This did not match how your network normally behaves."
-    };
-  }
-
   function renderEvents(incidents) {
     const box = el("events");
     if (!incidents.length) {
@@ -211,9 +115,9 @@
     }
 
     box.innerHTML = incidents.map((i, n) => {
-      const p = plainFor(i.label);
+      const p = ui.plainClass(i.label);
       const sev = ui.severityMeta(i.severity);
-      const dealt = isHandled(i);
+      const dealt = ui.isHandled(i);
       return `
         <div class="plain-row">
           <div class="line">
