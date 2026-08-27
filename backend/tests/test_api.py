@@ -177,6 +177,79 @@ def test_features_endpoint_differs_by_org_type(client, org_a, org_b):
     assert b["features"]["multiple_api_keys"] is False
 
 
+ATTACK_FLOW = {
+    "src_ip": "198.51.100.77", "dst_port": 80, "protocol": "TCP",
+    "duration": 0.02, "packets": 40000, "total_bytes": 2_400_000,
+}
+
+
+def test_both_account_types_get_the_same_verdict_on_the_same_traffic(client):
+    """
+    The consumer UI is a translation, never a softer judgement.
+
+    Its whole design rests on reading the same records the enterprise console
+    reads and only rewording them. If the backend ever started grading a
+    household's traffic more gently — a lower severity, a suppressed incident —
+    the friendly copy would stop being a translation and start being a lie, and
+    a home account would be reassured during something that is not fine.
+
+    So: identical flows into both org types, identical detection out.
+
+    Uses its own orgs rather than the shared fixtures because it has to ingest
+    traffic, and the isolation tests below rely on org_b having none.
+    """
+    def new_org(org_type, slug):
+        r = client.post("/api/auth/signup", json={
+            "email": f"{slug}@parity.example", "password": GOOD_PW,
+            "name": "Parity Admin", "org_name": f"Parity {slug}",
+            "org_type": org_type,
+        })
+        assert r.status_code == 201, r.text
+        cookies = dict(client.cookies)
+        client.cookies.clear()
+        return cookies
+
+    def ingest_and_read(cookies, node):
+        payload = dict(ATTACK_FLOW, node=node)
+        r = client.post("/api/ingest", cookies=cookies, json={"flows": [payload]})
+        assert r.status_code == 200, r.text
+        scored = r.json()["flows"][0]
+
+        incidents = client.get("/api/incidents", cookies=cookies).json()
+        match = next(i for i in incidents if i["src_ip"] == ATTACK_FLOW["src_ip"])
+        return scored["prediction"], round(scored["confidence"], 6), match["severity"]
+
+    company = ingest_and_read(new_org("company", "corp"), "EDGE-01")
+    consumer = ingest_and_read(new_org("consumer", "home"), "HOME-ROUTER")
+
+    assert company == consumer, (
+        f"company saw {company} and the household saw {consumer} for identical "
+        "traffic — the consumer view is no longer the same verdict reworded."
+    )
+    assert company[0] == "dos_ddos"
+
+
+def test_no_endpoint_exists_only_for_the_consumer_ui(client):
+    """
+    Both front ends share one API surface.
+
+    A consumer-only endpoint is how the two views drift apart: it can be
+    changed without the enterprise tests noticing, and the first symptom is the
+    two UIs disagreeing about the same network. The consumer pages are expected
+    to call /api/summary, /api/incidents and /api/nodes like everything else.
+    """
+    from backend.app.main import app
+
+    paths = {r.path for r in app.routes if getattr(r, "path", "").startswith("/api")}
+    consumer_only = sorted(
+        p for p in paths if "home" in p.lower() or "consumer" in p.lower()
+    )
+    assert not consumer_only, (
+        f"{consumer_only} exist only for the consumer UI. Both views must read "
+        "the same endpoints so they cannot disagree."
+    )
+
+
 def test_consumer_cannot_read_the_audit_log(client, org_b):
     """Gated server-side, not merely hidden in the sidebar.
 
