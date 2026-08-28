@@ -23,8 +23,8 @@
   // applyFeatureGates removes it outright otherwise — so every reference to it
   // has to tolerate a missing node.
   const SHARED = [
-    "in-org", "in-domain", "in-threshold", "in-auto", "in-severity",
-    "in-webhook", "in-notify"
+    "in-org", "in-domain", "in-threshold", "in-auto", "in-window",
+    "in-severity", "in-webhook", "in-notify"
   ];
 
   const state = { user: null, server: null, dirty: false };
@@ -74,6 +74,7 @@
     el("in-threshold").value = Math.round(s.threshold * 100);
     el("threshold-label").textContent = s.threshold.toFixed(2);
     el("in-auto").checked = s.auto_mitigate;
+    el("in-window").value = s.repeat_offender_window_minutes;
     el("in-severity").value = s.min_severity;
     el("in-webhook").value = s.webhook_url || "";
     el("in-notify").checked = s.notify_browser;
@@ -180,10 +181,22 @@
 
     // ── shared half: admin only ───────────────────────────────────────
     if (state.user.role === "admin") {
+      // A cleared number input reads as "", and Number("") is 0 — which the
+      // server rejects with a raw validation error naming a field the operator
+      // never typed a zero into. Caught here so the message names the box.
+      const window_ = Number(el("in-window").value);
+      if (!Number.isFinite(window_) || window_ < 1 || window_ > 10080) {
+        btn.disabled = false;
+        btn.innerHTML = `${icon("check", 12)} Save changes`;
+        el("in-window").focus();
+        return toast("Repeat-offender window must be between 1 and 10080 minutes.", "err");
+      }
+
       const payload = {
         org_name: el("in-org").value.trim(),
         threshold: Number(el("in-threshold").value) / 100,
         auto_mitigate: el("in-auto").checked,
+        repeat_offender_window_minutes: window_,
         min_severity: el("in-severity").value,
         webhook_url: el("in-webhook").value.trim(),
         notify_browser: el("in-notify").checked

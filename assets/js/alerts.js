@@ -128,7 +128,8 @@
           <td class="mono">${esc(fmt.bytes(i.peak_bps))}</td>
           <td title="${esc(fmt.datetime(i.opened_at))}">${esc(fmt.ago(i.opened_at))}</td>
           <td title="${esc(fmt.datetime(i.last_seen_at))}">${esc(fmt.ago(i.last_seen_at))}</td>
-          <td>${statusChip(i)}</td>
+          <td>${statusChip(i)}${
+            i.mitigation_tier ? ` ${tierChip(i)}` : ""}</td>
           <td>
             <div class="row-actions">
               ${canAct ? actions(i) : `<span class="chip">READ ONLY</span>`}
@@ -141,6 +142,48 @@
       btn.addEventListener("click", () =>
         act(Number(btn.dataset.id), btn.dataset.action, btn));
     });
+    body.querySelectorAll("[data-ban]").forEach((btn) => {
+      btn.addEventListener("click", () => openBan(Number(btn.dataset.ban)));
+    });
+  }
+
+  /**
+   * The escalation tier, as a chip.
+   *
+   * Deliberately never reads "Banned" or "Throttled". SENTRY watches traffic
+   * and has no path to the router, so every tier is a decision it recorded and
+   * nothing more — the API says `enforced: false` on all of them. "Ban recorded"
+   * is two characters longer and is the difference between a page an operator
+   * can trust and one that tells them traffic stopped when it did not.
+   */
+  function tierChip(i) {
+    if (!i.mitigation_tier) return "";
+    if (i.mitigation_tier === "throttle") {
+      // A critical incident built from two flows gets the gentlest limit, which
+      // looks like a contradiction sitting next to a CRITICAL chip. Severity is
+      // the detection verdict; the response is damped until there is enough
+      // traffic to be sure it is not noise. Said here so the row explains
+      // itself rather than looking broken.
+      const damped = i.flow_count < 5
+        ? ` Held at the gentlest limit while the incident is still only ${
+            i.flow_count} flow${i.flow_count === 1 ? "" : "s"}.`
+        : "";
+      return `<span class="chip" title="Rate limit recorded${
+        i.rate_limit_rps ? ` at ${i.rate_limit_rps} rps` : ""
+      }. Not applied by SENTRY.${damped}">THROTTLE RECORDED</span>`;
+    }
+    if (i.mitigation_tier === "repeat_offender") {
+      return `<span class="chip bad" title="This source has tripped the auto-response
+        several times inside the repeat-offender window.">REPEAT OFFENDER</span>`;
+    }
+    // ban. `until`, not `ago` — the expiry is in the future, and `ago` clamps a
+    // negative gap to zero, which would print every live ban as "0s ago" and
+    // read as already lapsed.
+    const left = i.mitigation_expires_at
+      ? ` · ${esc(fmt.until(i.mitigation_expires_at))}`
+      : " · permanent";
+    return `<span class="chip bad" title="Recorded in SENTRY only — apply the block
+      at your router or firewall.">BAN RECORDED${left}</span>`;
   }
 
   function statusChip(i) {
@@ -161,6 +204,12 @@
     }
     if (!i.mitigated) {
       out.push(`<button class="row-btn danger" data-action="mitigate" data-id="${i.id}">MITIGATE</button>`);
+    }
+    // Offered even on an already-banned incident, so a duration can be changed
+    // or a timed ban made permanent without having to resolve and reopen.
+    if (i.status !== "resolved") {
+      out.push(`<button class="row-btn danger" data-ban="${i.id}">${
+        i.mitigation_tier === "ban" ? "EDIT BAN" : "BAN"}</button>`);
     }
     if (i.status !== "resolved") {
       out.push(`<button class="row-btn" data-action="resolve" data-id="${i.id}">RESOLVE</button>`);
@@ -191,6 +240,109 @@
       btn.textContent = label;
     }
   }
+
+  // ── ban modal ───────────────────────────────────────────────────────────
+  // Same markup and open/close behaviour as the Team page's add-member modal,
+  // rather than a second dialog pattern that behaves almost but not quite the
+  // same way.
+  const banModal = el("ban-modal");
+  el("ico-ban").innerHTML = icon("shield", 15);
+  el("ico-ban-notice").innerHTML = icon("info", 15);
+
+  function openBan(id) {
+    const inc = state.incidents.find((i) => i.id === id);
+    if (!inc) return toast("That incident is no longer in the list.", "err");
+
+    banModal.dataset.incident = String(id);
+    el("ban-err").classList.remove("show");
+    el("ban-src").textContent = inc.src_ip;
+
+    const cls = classMeta(inc.label);
+    const sev = severityMeta(inc.severity);
+    // Every field here came with the incident. Nothing is fetched on open, so
+    // the modal cannot show a spinner or fail halfway.
+    el("ban-summary").textContent =
+      `${cls.label} · ${fmt.num(inc.flow_count)} flow${inc.flow_count === 1 ? "" : "s"}`
+      + ` · peak ${fmt.bytes(inc.peak_bps)} · seen on ${inc.node}`;
+    el("ban-sev-chip").innerHTML =
+      `<span class="chip" style="color:${sev.color};border-color:${sev.color}55">${
+        esc(sev.label.toUpperCase())}</span>`;
+
+    // Reopening on an existing ban starts from that ban, not from the default,
+    // so "edit" does not silently mean "reset to 24 hours".
+    if (inc.mitigation_tier === "ban" && !inc.mitigation_expires_at) {
+      el("ban-duration").value = "permanent";
+    } else {
+      el("ban-duration").value = "1440";
+    }
+    syncCustom();
+    banModal.classList.add("show");
+    el("ban-duration").focus();
+  }
+
+  const closeBan = () => banModal.classList.remove("show");
+
+  function syncCustom() {
+    const custom = el("ban-duration").value === "custom";
+    el("ban-custom-field").style.display = custom ? "" : "none";
+    if (custom) el("ban-custom").focus();
+  }
+
+  el("ban-duration").addEventListener("change", syncCustom);
+  el("ban-close").addEventListener("click", closeBan);
+  el("ban-cancel").addEventListener("click", closeBan);
+  banModal.addEventListener("click", (e) => { if (e.target === banModal) closeBan(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && banModal.classList.contains("show")) closeBan();
+  });
+
+  function banError(msg) {
+    const box = el("ban-err");
+    box.textContent = msg;
+    box.classList.add("show");
+  }
+
+  el("ban-save").addEventListener("click", async () => {
+    const id = Number(banModal.dataset.incident);
+    const choice = el("ban-duration").value;
+
+    let minutes = null; // null is permanent, and is sent as an absent key
+    if (choice === "custom") {
+      minutes = Number(el("ban-custom").value);
+      if (!Number.isFinite(minutes) || minutes <= 0) {
+        return banError("Enter a duration in minutes — 0.5 is thirty seconds.");
+      }
+      if (minutes > 525600) {
+        // Caught here as well as server-side so the operator gets a sentence
+        // instead of a validation payload naming a field they never saw.
+        return banError("Longer than a year — choose Permanent instead.");
+      }
+    } else if (choice !== "permanent") {
+      minutes = Number(choice);
+    }
+
+    const btn = el("ban-save");
+    btn.disabled = true;
+    btn.textContent = "Recording…";
+    try {
+      const updated = await api.incidentAction(id, "ban", minutes);
+      closeBan();
+      // The toast repeats the caveat. It is the only part of this flow some
+      // operators will read, and "Banned 198.51.100.77" on its own is the exact
+      // sentence that would leave them thinking the traffic had stopped.
+      toast(
+        `Ban recorded for ${updated.src_ip}${
+          minutes == null ? " (permanent)" : ""
+        } — apply it at your router to take effect.`
+      );
+      await load();
+    } catch (err) {
+      banError(err.message || "Could not record the ban.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Record ban";
+    }
+  });
 
   el("status-tabs").querySelectorAll("[data-status]").forEach((btn) => {
     btn.addEventListener("click", () => {

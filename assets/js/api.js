@@ -186,7 +186,13 @@
     // ── incidents ───────────────────────────────────────────────────────
     getIncidents: (status = "all", limit = 100) =>
       get(`/api/incidents?status=${status}&limit=${limit}`),
-    incidentAction: (id, action) => post(`/api/incidents/${id}/action`, { action }),
+    // `durationMinutes` only applies to "ban". Omitted entirely rather than
+    // sent as null when there is none: a permanent ban and a non-ban action
+    // both have no clock, and the server rejects the key on anything but a ban.
+    incidentAction: (id, action, durationMinutes) => post(
+      `/api/incidents/${id}/action`,
+      durationMinutes == null ? { action } : { action, duration_minutes: durationMinutes }
+    ),
 
     // ── actions ─────────────────────────────────────────────────────────
     mitigate: (flowId, srcIp) => post("/api/mitigate", { flow_id: flowId, src_ip: srcIp }),

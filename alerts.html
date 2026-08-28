@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css?v=20260828" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260829" />
 </head>
 <body data-org-scope="company">
 <div class="app">
@@ -68,9 +68,72 @@
   </div>
 </div>
 
-<script src="assets/js/config.js?v=20260828"></script>
-<script src="assets/js/api.js?v=20260828"></script>
-<script src="assets/js/ui.js?v=20260828"></script>
-<script src="assets/js/alerts.js?v=20260828"></script>
+<!-- record a ban -->
+<div class="modal-back" id="ban-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="ico-ban"></span>
+      <span class="t">Record a ban</span>
+      <button class="x" id="ban-close"></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-error" id="ban-err"></div>
+
+      <!-- Everything here is already loaded with the incident. Nothing is
+           fetched when the modal opens, so it cannot show a spinner or fail. -->
+      <div class="setting-row" style="padding-top:0">
+        <div class="setting-info">
+          <div class="t mono" id="ban-src">—</div>
+          <div class="d" id="ban-summary">—</div>
+        </div>
+        <div class="setting-control"><span id="ban-sev-chip"></span></div>
+      </div>
+
+      <div class="field">
+        <label for="ban-duration">Duration</label>
+        <select id="ban-duration" class="sel-input" style="min-width:0">
+          <option value="60">1 hour</option>
+          <option value="1440" selected>24 hours</option>
+          <option value="10080">7 days</option>
+          <option value="permanent">Permanent — until someone lifts it</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </div>
+
+      <div class="field" id="ban-custom-field" style="display:none">
+        <label for="ban-custom">Custom duration (minutes)</label>
+        <input type="number" id="ban-custom" min="0.1" max="525600" step="any"
+               placeholder="e.g. 90" autocomplete="off" />
+        <span class="hint">
+          Decimals are allowed, so 0.5 is thirty seconds. Anything over a year
+          is what Permanent is for.
+        </span>
+      </div>
+
+      <!-- The honest part, and the reason this modal exists rather than a
+           one-click button: SENTRY watches traffic and has no path to the
+           router, so this records a decision and nothing else. Saying
+           "Banned" flat out would leave the operator believing the traffic
+           had stopped. -->
+      <div class="notice" id="ban-notice" style="margin-top:4px">
+        <span id="ico-ban-notice"></span>
+        <div>
+          SENTRY records this ban — it does not apply it. Nothing here reaches
+          your router or firewall, so the traffic keeps arriving until you add
+          the block there yourself.
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="ban-cancel">Cancel</button>
+      <button class="btn btn-primary" id="ban-save">Record ban</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/config.js?v=20260829"></script>
+<script src="assets/js/api.js?v=20260829"></script>
+<script src="assets/js/ui.js?v=20260829"></script>
+<script src="assets/js/alerts.js?v=20260829"></script>
 </body>
 </html>

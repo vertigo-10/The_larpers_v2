@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css?v=20260828" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260829" />
 </head>
 <body>
 <div class="app">
@@ -98,6 +98,22 @@
             </div>
             <div class="setting-control">
               <label class="toggle"><input type="checkbox" id="in-auto" /><span class="track"></span><span class="knob"></span></label>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="t">Repeat-offender window</div>
+              <div class="d">
+                How far back to look when deciding a source keeps coming back.
+                Three auto-throttles inside this window flags it as a repeat
+                offender on the alerts page.
+              </div>
+            </div>
+            <div class="setting-control" style="display:flex;align-items:center;gap:9px">
+              <input type="number" min="1" max="10080" step="1" class="txt-input mono"
+                     id="in-window" style="min-width:0;width:88px" />
+              <span class="dim" style="font-size:12px">minutes</span>
             </div>
           </div>
         </section>
@@ -258,9 +274,9 @@
   </div>
 </div>
 
-<script src="assets/js/config.js?v=20260828"></script>
-<script src="assets/js/api.js?v=20260828"></script>
-<script src="assets/js/ui.js?v=20260828"></script>
-<script src="assets/js/settings.js?v=20260828"></script>
+<script src="assets/js/config.js?v=20260829"></script>
+<script src="assets/js/api.js?v=20260829"></script>
+<script src="assets/js/ui.js?v=20260829"></script>
+<script src="assets/js/settings.js?v=20260829"></script>
 </body>
 </html>
