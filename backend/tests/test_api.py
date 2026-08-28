@@ -533,6 +533,78 @@ def test_mitigating_a_source_closes_out_its_incident(client, org_a):
     assert target["mitigated"] is True
 
 
+# ── bans ──────────────────────────────────────────────────────────────────
+def _any_incident(client, cookies):
+    incidents = client.get("/api/incidents", cookies=cookies).json()
+    assert incidents, "no incident to act on"
+    return incidents[0]
+
+
+def test_operator_can_record_a_timed_ban(client, org_a):
+    inc = _any_incident(client, org_a["cookies"])
+    r = client.post(f"/api/incidents/{inc['id']}/action", cookies=org_a["cookies"],
+                    json={"action": "ban", "duration_minutes": 1440})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mitigation_tier"] == "ban"
+    assert body["mitigation_expires_at"] > body["last_seen_at"]
+    # The one guarantee the whole feature rests on: SENTRY cannot reach the
+    # router, so it must never report a ban as applied.
+    assert body["enforced"] is False
+
+
+def test_a_permanent_ban_has_no_expiry(client, org_a):
+    inc = _any_incident(client, org_a["cookies"])
+    r = client.post(f"/api/incidents/{inc['id']}/action", cookies=org_a["cookies"],
+                    json={"action": "ban"})
+    assert r.status_code == 200, r.text
+    assert r.json()["mitigation_tier"] == "ban"
+    assert r.json()["mitigation_expires_at"] is None
+
+
+def test_an_absurd_ban_duration_is_refused_not_a_500(client, org_a):
+    """
+    Unbounded was the ask, but `now + timedelta(minutes=1e15)` raises
+    OverflowError, which reaches the operator as a 500 with nothing actionable
+    in it. Rejecting it at the boundary says what is actually wrong.
+    """
+    inc = _any_incident(client, org_a["cookies"])
+    r = client.post(f"/api/incidents/{inc['id']}/action", cookies=org_a["cookies"],
+                    json={"action": "ban", "duration_minutes": 1e15})
+    assert r.status_code == 422, r.text
+
+
+def test_a_sub_minute_ban_is_accepted(client, org_a):
+    """Fractional minutes exist so a ban can be tested without waiting for one."""
+    inc = _any_incident(client, org_a["cookies"])
+    r = client.post(f"/api/incidents/{inc['id']}/action", cookies=org_a["cookies"],
+                    json={"action": "ban", "duration_minutes": 0.5})
+    assert r.status_code == 200, r.text
+
+
+def test_a_duration_on_a_non_ban_action_is_refused(client, org_a):
+    """
+    Silently dropping it would leave the caller certain a timer exists when
+    nothing on the row is counting down.
+    """
+    inc = _any_incident(client, org_a["cookies"])
+    r = client.post(f"/api/incidents/{inc['id']}/action", cookies=org_a["cookies"],
+                    json={"action": "acknowledge", "duration_minutes": 60})
+    assert r.status_code == 400, r.text
+
+
+def test_a_ban_is_recorded_in_the_audit_log_as_unenforced(client, org_a):
+    """
+    The audit log is what gets read during a post-mortem. A line reading
+    "banned 198.51.100.77" would be taken as evidence the traffic stopped.
+    """
+    r = client.get("/api/team/audit", cookies=org_a["cookies"])
+    assert r.status_code == 200, r.text
+    bans = [e for e in r.json() if e["action"] == "incident.ban"]
+    assert bans, "the ban was never audited"
+    assert "not enforced" in bans[0]["detail"].lower()
+
+
 # ── settings ──────────────────────────────────────────────────────────────
 def test_settings_roundtrip(client, org_a):
     r = client.patch("/api/settings", cookies=org_a["cookies"],

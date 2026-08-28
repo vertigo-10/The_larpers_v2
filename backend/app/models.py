@@ -200,6 +200,10 @@ class OrgSettings(Base):
     min_severity: Mapped[str] = mapped_column(String(20), default="high")
     poll_interval_ms: Mapped[int] = mapped_column(Integer, default=2000)
     max_table_rows: Mapped[int] = mapped_column(Integer, default=45)
+    # How far back to look when deciding whether a source is a repeat offender.
+    # Per-org because "three times in an hour" means something very different on
+    # a home router than on an edge segment where scans are background noise.
+    repeat_offender_window_minutes: Mapped[int] = mapped_column(Integer, default=60)
 
     org: Mapped["Org"] = relationship(back_populates="settings")
 
@@ -419,6 +423,23 @@ class Incident(Base):
     severity: Mapped[str] = mapped_column(String(20), default="medium")
     status: Mapped[str] = mapped_column(String(20), default=IncidentStatus.open.value)
     mitigated: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # The escalation tier layered over `mitigated`. That boolean only ever said
+    # whether a decision was taken; these say which one and for how long.
+    # Nullable rather than defaulted to a tier name, because every incident
+    # opened before this existed genuinely has no tier and guessing one for it
+    # would put words in the record's mouth.
+    #
+    # None of these three are enforced by SENTRY. It watches traffic and has no
+    # path to the router, so a tier is a decision it recorded and stands behind,
+    # not an action it performed — the UI must keep saying so.
+    mitigation_tier: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    rate_limit_rps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # NULL means two different things depending on the tier: no ban at all, or a
+    # permanent one. Read it together with `mitigation_tier`, never alone.
+    mitigation_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True
+    )
 
     acknowledged_by_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

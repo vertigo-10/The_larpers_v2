@@ -73,6 +73,14 @@ _ADDITIVE_COLUMNS = [
     # their own account on the next deploy.
     ("users", "status", "VARCHAR(20) NOT NULL DEFAULT 'active'"),
     ("users", "join_method", "VARCHAR(20) NOT NULL DEFAULT 'founder'"),
+    ("org_settings", "repeat_offender_window_minutes", "INTEGER NOT NULL DEFAULT 60"),
+    # Nullable with no default, unlike every entry above. Incidents that predate
+    # escalation were never tiered, and stamping them with one on deploy would
+    # invent a decision nobody made — the alerts page would show bans no
+    # operator ever chose.
+    ("incidents", "mitigation_tier", "VARCHAR(20)"),
+    ("incidents", "rate_limit_rps", "INTEGER"),
+    ("incidents", "mitigation_expires_at", "TIMESTAMP"),
 ]
 
 

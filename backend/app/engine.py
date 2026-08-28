@@ -24,6 +24,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import mitigation
 from .config import settings
 from .db import SessionLocal
 from .ml.infer import get_detector
@@ -180,18 +181,10 @@ class FlowGenerator:
 
 
 # ── severity ──────────────────────────────────────────────────────────────
-def severity_for(label: str, confidence: float, bps: float) -> str:
-    if label == BENIGN:
-        return "low"
-    if label == "dos_ddos":
-        if confidence >= 0.95 and bps > 5_000_000:
-            return "critical"
-        return "high" if confidence >= 0.9 else "medium"
-    # scan
-    return "medium" if confidence >= 0.9 else "low"
-
-
-_SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+# Defined in severity.py so mitigation.py can use it too — it is called from
+# this module, so it cannot import from it. Re-exported here because api.py and
+# the tests have always imported the name from `engine`.
+from .severity import _SEVERITY_RANK, severity_for  # noqa: E402,F401
 
 
 # ── core processing ───────────────────────────────────────────────────────
@@ -214,6 +207,9 @@ def process_flows(
         org_settings = db.get(OrgSettings, org_id)
     threshold = org_settings.threshold if org_settings else settings.default_threshold
     auto_mitigate = org_settings.auto_mitigate if org_settings else True
+    window_minutes = (
+        org_settings.repeat_offender_window_minutes if org_settings else 60
+    )
 
     results = detector.predict_batch(raw_flows)
     now = datetime.now(timezone.utc)
@@ -232,7 +228,6 @@ def process_flows(
         bps = total_bytes / duration
 
         is_attack = label != BENIGN
-        mitigated = bool(is_attack and auto_mitigate and confidence >= threshold)
         ts = raw.get("ts") or now
         if isinstance(ts, (int, float)):
             ts = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
@@ -251,7 +246,10 @@ def process_flows(
             bytes_per_sec=bps,
             prediction=label,
             confidence=confidence,
-            mitigated=mitigated,
+            # Set below, once the incident exists. The tier depends on how many
+            # flows the incident has and how often this source has offended
+            # lately, neither of which is knowable from the flow alone.
+            mitigated=False,
             source=source,
             truth=raw.get("truth"),
         )
@@ -266,8 +264,39 @@ def process_flows(
         # notifications against the org's min_severity using this field.
         sev = severity_for(label, confidence, bps)
 
+        mitigated = False
         if is_attack:
-            _correlate_incident(db, org_id, flow, confidence, bps, now, sev)
+            incident = _correlate_incident(db, org_id, flow, confidence, bps, now, sev)
+            # Decided against the incident's running flow count, not this single
+            # flow's, so the sample-size guardrail sees the whole picture: the
+            # fifth flow of a flood should not be judged as if it were the only
+            # evidence there is.
+            decision = mitigation.decide(
+                db, org_id, flow.src_ip, label, confidence, bps,
+                incident.flow_count,
+                is_attack=True,
+                auto_mitigate=auto_mitigate,
+                threshold=threshold,
+                window_minutes=window_minutes,
+                now=now,
+            )
+            mitigated = decision.mitigated
+            flow.mitigated = mitigated
+            if mitigation.apply_to_incident(incident, decision):
+                # Logged only when the tier actually moved. Every flow of a
+                # flood carries the same verdict, so writing on each one would
+                # bury the escalation that matters under thousands of identical
+                # lines in the one place an operator goes to reconstruct events.
+                db.add(AuditLog(
+                    org_id=org_id, user_id=None, user_label="SENTRY",
+                    action=f"mitigation.{decision.tier}",
+                    detail=(
+                        f"Incident #{incident.id} ({label} from {flow.src_ip}) "
+                        f"→ {decision.tier}"
+                        + (f", {decision.rate_limit_rps} rps" if decision.rate_limit_rps else "")
+                        + f". {decision.reason} Recorded only; not enforced."
+                    ),
+                ))
 
         out.append({
             "id": flow.flow_ref,
@@ -298,12 +327,17 @@ def _correlate_incident(
     bps: float,
     now: datetime,
     sev: str,
-) -> None:
+) -> Incident:
     """Attach the flow to an open incident from the same source, or open one.
 
     `sev` is computed by the caller rather than here because the flow payload
     sent to the browser needs the same value; passing it in keeps the incident
     severity and the severity the UI sees from drifting apart.
+
+    Returns the incident so the caller can pick a mitigation tier against its
+    running flow count. It no longer decides `mitigated` itself: that now
+    depends on the incident's own history, which is only knowable once the row
+    exists.
     """
     cutoff = now - INCIDENT_WINDOW
     stmt = (
@@ -333,7 +367,7 @@ def _correlate_incident(
             peak_bps=bps,
             severity=sev,
             status=IncidentStatus.open.value,
-            mitigated=flow.mitigated,
+            mitigated=False,
         )
         db.add(incident)
         db.flush()
@@ -344,10 +378,9 @@ def _correlate_incident(
         incident.peak_bps = max(incident.peak_bps, bps)
         if _SEVERITY_RANK[sev] > _SEVERITY_RANK.get(incident.severity, 0):
             incident.severity = sev
-        if flow.mitigated:
-            incident.mitigated = True
 
     flow.incident_id = incident.id
+    return incident
 
 
 # ── org bootstrap ─────────────────────────────────────────────────────────
@@ -473,6 +506,11 @@ async def retention_loop() -> None:
     Deliberately not folded back into engine_loop: that loop only does work
     when the simulator is enabled, and retention is needed precisely when it
     is not.
+
+    Ban expiry rides along here for exactly the same reason. It is tempting to
+    put it in the engine tick, but a real deployment runs with the simulator
+    off — so a "24h ban" would sit there forever on the one configuration that
+    matters, and only expire correctly in demos.
     """
     interval = max(settings.retention_interval_s, 10)
     while not _stop.is_set():
@@ -485,6 +523,22 @@ async def retention_loop() -> None:
             retention_pass()
         except Exception as exc:  # noqa: BLE001 - never let the loop die silently
             print(f"[sentry] retention pass failed: {exc}")
+        # Separate try: a retention failure must not stop bans from lapsing,
+        # and a sweep failure must not stop the trim. They share a clock, not
+        # a fate.
+        try:
+            expiry_pass()
+        except Exception as exc:  # noqa: BLE001 - never let the loop die silently
+            print(f"[sentry] ban expiry sweep failed: {exc}")
+
+
+def expiry_pass() -> int:
+    """Retire every ban whose duration has elapsed. Returns how many."""
+    db = SessionLocal()
+    try:
+        return mitigation.sweep_expired(db)
+    finally:
+        db.close()
 
 
 async def engine_loop() -> None:

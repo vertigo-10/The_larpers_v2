@@ -226,11 +226,38 @@ class IncidentOut(BaseModel):
     severity: str
     status: str
     mitigated: bool
+    # Which escalation step was recorded, if any. `mitigation_expires_at` is
+    # null both when there is no ban and when the ban is permanent, so the two
+    # fields have to be read together — see MITIGATION_TIERS.
+    mitigation_tier: Optional[str] = None
+    rate_limit_rps: Optional[int] = None
+    mitigation_expires_at: Optional[int] = None
+    # Constant false today. Sent anyway so the UI reads enforcement state back
+    # rather than inferring it from the tier: the day an enforcement hook does
+    # land, a page that assumed "tier set means applied" would already have been
+    # lying for months, and nothing would flag the change.
+    enforced: bool = False
     acknowledged_by: Optional[str] = None
 
 
+# The escalation ladder. Ordered, and the order is load-bearing: the engine only
+# ever moves an incident up it, so an operator's ban cannot be quietly downgraded
+# to a throttle by the next flow that happens to arrive.
+MITIGATION_TIERS = ("throttle", "repeat_offender", "ban")
+
+# A ban longer than this is what "permanent" is for. The real reason for a cap is
+# narrower: `now + timedelta(minutes=v)` raises OverflowError on absurd input,
+# which surfaces as a 500 rather than a message anyone can act on.
+MAX_BAN_MINUTES = 525_600  # one year
+
+
 class IncidentActionIn(BaseModel):
-    action: str = Field(pattern="^(acknowledge|resolve|mitigate|reopen)$")
+    action: str = Field(pattern="^(acknowledge|resolve|mitigate|reopen|ban)$")
+    # Float, not int, so a ban can be tested without waiting a minute for it to
+    # expire. None on a ban means permanent.
+    duration_minutes: Optional[float] = Field(
+        default=None, gt=0, le=MAX_BAN_MINUTES
+    )
 
 
 # ── settings ──────────────────────────────────────────────────────────────
@@ -242,6 +269,7 @@ class SettingsOut(BaseModel):
     min_severity: str
     poll_interval_ms: int
     max_table_rows: int
+    repeat_offender_window_minutes: int = 60
     org_name: str
     # Empty means nobody can request to join by email domain, and an invite is
     # the only route in.
@@ -256,6 +284,13 @@ class SettingsIn(BaseModel):
     min_severity: Optional[str] = Field(default=None, pattern="^(low|medium|high|critical)$")
     poll_interval_ms: Optional[int] = Field(default=None, ge=250, le=60000)
     max_table_rows: Optional[int] = Field(default=None, ge=5, le=500)
+    # Floor of 1: a zero-length window would mean no two events are ever "in the
+    # same window", so nothing could ever reach repeat-offender and the tier
+    # would silently stop existing. Ceiling of a week keeps the lookback inside
+    # the range the incident table is actually indexed for.
+    repeat_offender_window_minutes: Optional[int] = Field(
+        default=None, ge=1, le=10_080
+    )
     org_name: Optional[str] = Field(default=None, max_length=120)
     email_domain: Optional[str] = Field(default=None, max_length=255)
 

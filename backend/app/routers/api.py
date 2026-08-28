@@ -705,6 +705,10 @@ def list_incidents(
             flow_count=r.flow_count, peak_confidence=round(r.peak_confidence, 4),
             peak_bps=round(r.peak_bps, 1), severity=r.severity, status=r.status,
             mitigated=r.mitigated,
+            mitigation_tier=r.mitigation_tier,
+            rate_limit_rps=r.rate_limit_rps,
+            mitigation_expires_at=_ms(r.mitigation_expires_at)
+                if r.mitigation_expires_at else None,
             acknowledged_by=r.acknowledged_by.name if r.acknowledged_by else None,
         )
         for r in rows
@@ -722,6 +726,15 @@ def incident_action(
     if not inc or inc.org_id != user.org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such incident.")
 
+    # Rejected rather than ignored. A caller sending a duration with "resolve"
+    # believes it is setting one, and silently dropping it would leave them
+    # certain a timer exists when nothing on the row is counting down.
+    if body.duration_minutes is not None and body.action != "ban":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "duration_minutes only applies to the 'ban' action.",
+        )
+
     now = datetime.now(timezone.utc)
     if body.action == "acknowledge":
         inc.status = IncidentStatus.acknowledged.value
@@ -733,6 +746,23 @@ def incident_action(
     elif body.action == "reopen":
         inc.status = IncidentStatus.open.value
         inc.resolved_at = None
+    elif body.action == "ban":
+        # Never reached automatically — the engine tops out at repeat_offender.
+        # A ban is the one step that can take a household off the internet on a
+        # false positive, so it stays behind a person.
+        inc.mitigated = True
+        inc.mitigation_tier = "ban"
+        if body.duration_minutes is None:
+            # Permanent. Null expiry means "no clock", which is why the tier has
+            # to be read alongside it — the same null on a non-ban means no ban.
+            inc.mitigation_expires_at = None
+        else:
+            inc.mitigation_expires_at = now + timedelta(minutes=body.duration_minutes)
+        db.execute(
+            update(Flow)
+            .where(Flow.incident_id == inc.id, Flow.org_id == user.org_id)
+            .values(mitigated=True)
+        )
     elif body.action == "mitigate":
         inc.mitigated = True
         # One UPDATE. The previous version ran a SELECT whose result was
@@ -745,9 +775,18 @@ def incident_action(
             .values(mitigated=True)
         )
 
+    detail = f"Incident #{inc.id} ({inc.label} from {inc.src_ip})"
+    if body.action == "ban":
+        window = (
+            "permanently" if body.duration_minutes is None
+            else f"for {body.duration_minutes:g} min"
+        )
+        # Says "recorded" in the permanent record too. The audit log is what
+        # gets read back during a post-mortem, and a line reading "banned
+        # 198.51.100.77" would be taken as evidence the traffic stopped.
+        detail += f" — ban recorded {window}. Not enforced by SENTRY."
     db.add(AuditLog(org_id=user.org_id, user_id=user.id, user_label=user.name,
-                    action=f"incident.{body.action}",
-                    detail=f"Incident #{inc.id} ({inc.label} from {inc.src_ip})"))
+                    action=f"incident.{body.action}", detail=detail))
     db.commit()
     db.refresh(inc)
     return IncidentOut(
@@ -757,6 +796,10 @@ def incident_action(
         flow_count=inc.flow_count, peak_confidence=round(inc.peak_confidence, 4),
         peak_bps=round(inc.peak_bps, 1), severity=inc.severity, status=inc.status,
         mitigated=inc.mitigated,
+        mitigation_tier=inc.mitigation_tier,
+        rate_limit_rps=inc.rate_limit_rps,
+        mitigation_expires_at=_ms(inc.mitigation_expires_at)
+            if inc.mitigation_expires_at else None,
         acknowledged_by=inc.acknowledged_by.name if inc.acknowledged_by else None,
     )
 
@@ -890,6 +933,7 @@ def get_settings(db: Session = Depends(get_db), user: User = Depends(current_use
         webhook_url=cfg.webhook_url, notify_browser=cfg.notify_browser,
         min_severity=cfg.min_severity, poll_interval_ms=cfg.poll_interval_ms,
         max_table_rows=cfg.max_table_rows,
+        repeat_offender_window_minutes=cfg.repeat_offender_window_minutes,
         org_name=user.org.name if user.org else "",
         email_domain=user.org.email_domain if user.org else "",
     )
@@ -904,7 +948,8 @@ def update_settings(
     cfg = _org_settings(db, user.org_id)
     changed = []
     for field in ("threshold", "auto_mitigate", "webhook_url", "notify_browser",
-                  "min_severity", "poll_interval_ms", "max_table_rows"):
+                  "min_severity", "poll_interval_ms", "max_table_rows",
+                  "repeat_offender_window_minutes"):
         value = getattr(body, field)
         if value is not None:
             setattr(cfg, field, value)
@@ -940,6 +985,7 @@ def update_settings(
         webhook_url=cfg.webhook_url, notify_browser=cfg.notify_browser,
         min_severity=cfg.min_severity, poll_interval_ms=cfg.poll_interval_ms,
         max_table_rows=cfg.max_table_rows,
+        repeat_offender_window_minutes=cfg.repeat_offender_window_minutes,
         org_name=user.org.name if user.org else "",
         email_domain=user.org.email_domain if user.org else "",
     )
