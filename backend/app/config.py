@@ -81,6 +81,19 @@ class Settings(BaseSettings):
     # noise. Lowered in tests to keep them fast.
     baseline_window_s: int = 300
 
+    # ── CICIDS2017 replay ────────────────────────────────────────────────────
+    # When set to a directory containing CIC-IDS2017 *.csv files, the simulator
+    # cycles through those rows instead of generating synthetic traffic. Unset
+    # (the default) keeps the synthetic generator so development and CI work
+    # without needing the dataset downloaded.
+    #
+    # Set via environment variable:
+    #   SENTRY_CICIDS_DATA_DIR=/path/to/CIC-IDS2017
+    #
+    # Download the dataset from:
+    #   https://www.kaggle.com/datasets/cicdataset/cicids2017
+    cicids_data_dir: Optional[str] = None
+
     # ── model artifacts ───────────────────────────────────────────────────
     # Anchored to the package, not the working directory. A relative default
     # meant the model only loaded if you happened to launch from backend/, and

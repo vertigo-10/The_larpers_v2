@@ -14,10 +14,12 @@ number.
 """
 
 import asyncio
+import csv
 import math
 import random
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from sqlalchemy import delete, func, select
@@ -101,6 +103,161 @@ manager = ConnectionManager()
 
 
 # ── synthetic traffic generator ───────────────────────────────────────────
+class CICIDSReplay:
+    """Cycles through CIC-IDS2017 CSV rows as the simulator source.
+
+    Replaces the random FlowGenerator when SENTRY_CICIDS_DATA_DIR points at a
+    directory of CIC-IDS2017 CSVs. Every tick returns the next N rows from the
+    dataset in order, looping back to the start when exhausted — so the demo
+    runs indefinitely without needing a live network.
+
+    The `phase` attribute mirrors FlowGenerator's contract so the engine_loop
+    broadcast is unchanged: 0 = last row was BENIGN, 1 = elevated,
+    2 = active attack. The frontend ignores it, but keeping the field means
+    no changes upstream.
+
+    Column mapping (CIC-IDS2017 → FlowIn):
+        Flow Duration   ÷ 1e6      → duration   (microseconds → seconds)
+        Total Fwd Packets          → packets
+        Total Length of Fwd Packets→ total_bytes
+        Destination Port           → dst_port
+        Protocol  6→TCP 17→UDP    → protocol
+        Label  BENIGN→normal else → truth  (dos_ddos / scan best-effort)
+        src_ip synthesised from row index so incidents group realistically
+    """
+
+    # Labels we map from CICIDS2017's free-text Label column.
+    _DOS_KEYWORDS = ("dos", "ddos", "hulk", "goldeneye", "slowloris", "heartbleed",
+                     "bot", "infiltration")
+    _SCAN_KEYWORDS = ("portscan", "ftp-patator", "ssh-patator", "brute")
+
+    def __init__(self, node_labels: List[str], data_dir: str) -> None:
+        self.nodes = node_labels or ["EDGE-01"]
+        self.phase = 0
+        self._rows: List[Dict] = []
+        self._idx = 0
+        self._load(Path(data_dir))
+
+    def _load(self, data_dir: Path) -> None:
+        csvs = sorted(data_dir.glob("*.csv"))
+        if not csvs:
+            print(f"[sentry] CICIDSReplay: no CSVs in {data_dir} — falling back to synthetic")
+            return
+        print(f"[sentry] CICIDSReplay: loading {len(csvs)} CSV(s) from {data_dir}")
+        rows: List[Dict] = []
+        for path in csvs:
+            try:
+                with open(path, newline="", encoding="utf-8-sig") as fh:
+                    for row in csv.DictReader(fh):
+                        rows.append({k.strip(): v.strip() for k, v in row.items()})
+            except Exception as exc:
+                print(f"[sentry] CICIDSReplay: skipping {path.name}: {exc}")
+        random.shuffle(rows)          # mix files so attacks don't arrive in a block
+        self._rows = rows
+        print(f"[sentry] CICIDSReplay: {len(rows):,} rows loaded")
+
+    @staticmethod
+    def _map_label(raw: str) -> str:
+        l = raw.lower()
+        if l == "benign":
+            return "normal"
+        for kw in CICIDSReplay._DOS_KEYWORDS:
+            if kw in l:
+                return "dos_ddos"
+        return "scan"
+
+    @staticmethod
+    def _map_protocol(raw: str) -> str:
+        try:
+            n = int(raw)
+            return "TCP" if n == 6 else ("UDP" if n == 17 else "TCP")
+        except (ValueError, TypeError):
+            r = str(raw).upper()
+            return r if r in ("TCP", "UDP", "ICMP") else "TCP"
+
+    @staticmethod
+    def _safe_float(val: str, default: float = 0.0) -> float:
+        try:
+            v = float(val)
+            return default if (v != v or v == float("inf") or v == float("-inf")) else max(v, 0.0)
+        except (ValueError, TypeError):
+            return default
+
+    def _row_to_flow(self, row: Dict, seq: int) -> Dict:
+        """Convert one CIC-IDS2017 CSV row to the FlowGenerator output shape."""
+        # Duration is stored in microseconds in CIC-IDS2017.
+        dur_us = self._safe_float(row.get("Flow Duration", "0"))
+        duration = max(dur_us / 1_000_000.0, 1e-4)
+
+        packets = max(int(self._safe_float(row.get("Total Fwd Packets", "1"))), 1)
+        total_bytes = self._safe_float(row.get("Total Length of Fwd Packets", "0"))
+        dst_port = int(self._safe_float(row.get("Destination Port", "80"))) % 65536
+        protocol = self._map_protocol(row.get("Protocol", "6"))
+
+        label_raw = row.get("Label", "BENIGN")
+        truth = self._map_label(label_raw)
+
+        # Synthesise a stable src_ip from the row index so flows from the same
+        # "attacker" in the dataset group into the same incident. Using the
+        # real Source IP column from CICIDS2017 would be ideal but that column
+        # is absent from the Kaggle version of the dataset.
+        bucket = seq % 254
+        src_ip = f"10.0.{bucket // 20}.{(bucket % 20) + 1}"
+        if truth == "normal":
+            # Benign traffic comes from varied internal addresses.
+            src_ip = f"192.168.{random.randint(0, 3)}.{random.randint(1, 254)}"
+
+        node = random.choice(self.nodes)
+
+        return {
+            "flow_ref": f"CIC-{seq}",
+            "src_ip": src_ip,
+            "dst_port": dst_port,
+            "protocol": protocol,
+            "node": node,
+            "duration": round(duration, 4),
+            "packets": packets,
+            "total_bytes": round(total_bytes, 1),
+            "truth": truth,
+        }
+
+    def tick(self, n: int = 1) -> List[Dict]:
+        """Return next N rows, cycling back to start when exhausted."""
+        if not self._rows:
+            # No data loaded — generate one synthetic placeholder so the
+            # dashboard doesn't go blank and the operator knows to check the
+            # data directory.
+            return [{
+                "flow_ref": f"SYN-{random.randint(10000,99999)}",
+                "src_ip": "0.0.0.0",
+                "dst_port": 80,
+                "protocol": "TCP",
+                "node": self.nodes[0] if self.nodes else "EDGE-01",
+                "duration": 1.0,
+                "packets": 1,
+                "total_bytes": 64.0,
+                "truth": "normal",
+            }]
+
+        out = []
+        for _ in range(n):
+            row = self._rows[self._idx % len(self._rows)]
+            flow = self._row_to_flow(row, self._idx)
+            out.append(flow)
+            self._idx += 1
+
+        # Update phase for the broadcast (0=quiet 1=elevated 2=attack).
+        truths = {f["truth"] for f in out}
+        if "dos_ddos" in truths:
+            self.phase = 2
+        elif "scan" in truths:
+            self.phase = 1
+        else:
+            self.phase = 0
+
+        return out
+
+
 class FlowGenerator:
     """Produces plausible flow characteristics with an attack-phase state machine.
 
@@ -431,16 +588,34 @@ def _ensure_node(db: Session, org_id: int, label: str) -> None:
 
 
 # ── background loop ───────────────────────────────────────────────────────
-_generators: Dict[int, FlowGenerator] = {}
+# Key is org_id. Value is either CICIDSReplay or FlowGenerator, both expose
+# the same .tick(n) → List[Dict] and .phase int interface.
+_generators: Dict[int, object] = {}
 _stop = asyncio.Event()
 
 
-def _generator_for(db: Session, org_id: int) -> FlowGenerator:
+def _generator_for(db: Session, org_id: int) -> object:
+    """Return the right generator for this org.
+
+    Picks CICIDSReplay when SENTRY_CICIDS_DATA_DIR points at a directory that
+    contains at least one *.csv file; falls back to the synthetic FlowGenerator
+    otherwise. The fallback keeps development and CI working without needing the
+    dataset downloaded.
+    """
     if org_id not in _generators:
         labels = list(
             db.execute(select(Node.label).where(Node.org_id == org_id)).scalars()
         )
-        _generators[org_id] = FlowGenerator(labels)
+        data_dir = getattr(settings, "cicids_data_dir", None)
+        if data_dir and Path(data_dir).is_dir() and list(Path(data_dir).glob("*.csv")):
+            _generators[org_id] = CICIDSReplay(labels, data_dir)
+        else:
+            if data_dir:
+                print(
+                    f"[sentry] SENTRY_CICIDS_DATA_DIR={data_dir!r} set but no CSVs "
+                    f"found — using synthetic generator. Drop CIC-IDS2017 CSVs there."
+                )
+            _generators[org_id] = FlowGenerator(labels)
     return _generators[org_id]
 
 
