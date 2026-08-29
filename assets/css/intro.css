@@ -1,0 +1,229 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Opening sequence.
+
+   A boot animation on a security console has one hard requirement that
+   outranks how it looks: it must never be able to trap the operator behind it.
+   Three independent things have to fail before that can happen.
+
+     1. The overlay animates itself out. The fade is a CSS animation with
+        `forwards` fill, so it clears even if no script ever runs.
+     2. `pointer-events: none` from the very first frame. Even mid-animation
+        the dashboard underneath stays clickable.
+     3. intro.js removes the node afterwards, and has its own timeout.
+
+   Belt, braces and a third thing, because the failure mode is a security tool
+   that cannot be operated during an incident.
+
+   The whole sequence is ~1.9s and runs on every page load, including every
+   sidebar click — see intro.js. That is only acceptable because of rule 2: the
+   dashboard underneath stays clickable throughout, so the animation is
+   something you can see past rather than something you must wait out.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(900px 520px at 50% 44%, rgba(47, 224, 138, 0.08), transparent 68%),
+    var(--bg, #07090a);
+  pointer-events: none;              /* never blocks the app underneath */
+  animation: intro-out 620ms cubic-bezier(0.65, 0, 0.35, 1) 1280ms forwards;
+  will-change: opacity, transform;
+}
+
+/* Faint grid, so the wordmark lands on a surface rather than in a void. */
+.intro::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(47, 224, 138, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 224, 138, 0.055) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(circle at 50% 46%, #000 12%, transparent 62%);
+  -webkit-mask-image: radial-gradient(circle at 50% 46%, #000 12%, transparent 62%);
+  opacity: 0;
+  animation: intro-grid 900ms ease-out 60ms forwards;
+}
+
+.intro-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(560px, 84vw);
+  height: min(560px, 84vw);
+}
+
+/* ── radar ─────────────────────────────────────────────────────────────── */
+.intro-radar {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.intro-ring {
+  position: absolute;
+  border: 1px solid rgba(47, 224, 138, 0.22);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0.4);
+  animation: intro-ring 1100ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.intro-ring.r1 { width: 26%;  height: 26%;  animation-delay: 40ms; }
+.intro-ring.r2 { width: 50%;  height: 50%;  animation-delay: 130ms; }
+.intro-ring.r3 { width: 74%;  height: 74%;  animation-delay: 220ms; border-color: rgba(47,224,138,0.14); }
+.intro-ring.r4 { width: 98%;  height: 98%;  animation-delay: 310ms; border-color: rgba(47,224,138,0.08); }
+
+/* The sweep. One rotation, then it stops — a looping radar would imply the
+   console is still waiting on something. */
+.intro-sweep {
+  position: absolute;
+  width: 98%;
+  height: 98%;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    rgba(47, 224, 138, 0.30) 0deg,
+    rgba(47, 224, 138, 0.10) 26deg,
+    transparent 62deg,
+    transparent 360deg
+  );
+  mask-image: radial-gradient(circle, transparent 12%, #000 13%, #000 100%);
+  -webkit-mask-image: radial-gradient(circle, transparent 12%, #000 13%, #000 100%);
+  opacity: 0;
+  transform: rotate(-90deg);
+  animation: intro-sweep 1250ms cubic-bezier(0.4, 0, 0.2, 1) 120ms forwards;
+}
+
+/* Nodes the sweep "finds". Staggered so they read as detections landing. */
+.intro-node {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green, #2fe08a);
+  box-shadow: 0 0 0 0 rgba(47, 224, 138, 0.45);
+  opacity: 0;
+  animation: intro-node 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ── wordmark ──────────────────────────────────────────────────────────── */
+.intro-mark {
+  position: relative;
+  text-align: center;
+  z-index: 2;
+}
+
+.intro-word {
+  display: flex;
+  justify-content: center;
+  gap: clamp(2px, 0.8vw, 7px);
+  font-family: var(--sans, "Inter", sans-serif);
+  font-weight: 800;
+  font-size: clamp(46px, 11vw, 108px);
+  letter-spacing: clamp(1px, 0.5vw, 6px);
+  line-height: 1;
+  color: var(--text, #e7eef1);
+}
+
+/* Each glyph rises through its own clip window. Individually animated so the
+   wordmark assembles rather than simply appearing. */
+.intro-ch {
+  display: block;
+  transform: translateY(115%);
+  animation: intro-ch 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.intro-clip { overflow: hidden; display: block; }
+
+.intro-word .accent { color: var(--green, #2fe08a); }
+
+/* Rule that draws out from the centre under the wordmark. */
+.intro-rule {
+  height: 2px;
+  margin: clamp(10px, 1.8vw, 20px) auto 0;
+  width: 0;
+  background: linear-gradient(90deg,
+    transparent, var(--green, #2fe08a) 22%, var(--green, #2fe08a) 78%, transparent);
+  box-shadow: 0 0 18px rgba(47, 224, 138, 0.5);
+  animation: intro-rule 700ms cubic-bezier(0.16, 1, 0.3, 1) 480ms forwards;
+}
+
+.intro-sub {
+  margin-top: clamp(9px, 1.5vw, 15px);
+  font-family: var(--mono, monospace);
+  font-size: clamp(9px, 1.15vw, 12px);
+  letter-spacing: clamp(2px, 0.7vw, 6px);
+  text-transform: uppercase;
+  color: var(--muted, #6d7d85);
+  opacity: 0;
+  animation: intro-sub 620ms ease-out 700ms forwards;
+}
+
+/* ── keyframes ─────────────────────────────────────────────────────────── */
+@keyframes intro-grid {
+  to { opacity: 1; }
+}
+
+@keyframes intro-ring {
+  0%   { opacity: 0; transform: scale(0.45); }
+  55%  { opacity: 1; }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes intro-sweep {
+  0%   { opacity: 0; transform: rotate(-90deg); }
+  12%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { opacity: 0; transform: rotate(280deg); }
+}
+
+@keyframes intro-node {
+  0%   { opacity: 0; transform: scale(0.2); box-shadow: 0 0 0 0 rgba(47,224,138,0.5); }
+  45%  { opacity: 1; transform: scale(1.5); }
+  100% { opacity: 0.85; transform: scale(1); box-shadow: 0 0 0 9px rgba(47,224,138,0); }
+}
+
+@keyframes intro-ch {
+  0%   { transform: translateY(115%); }
+  100% { transform: translateY(0); }
+}
+
+@keyframes intro-rule {
+  0%   { width: 0; }
+  100% { width: min(360px, 62vw); }
+}
+
+@keyframes intro-sub {
+  0%   { opacity: 0; letter-spacing: clamp(6px, 1.6vw, 14px); }
+  100% { opacity: 1; }
+}
+
+/* Lifts and dissolves, so the dashboard reads as arriving underneath rather
+   than the overlay merely switching off. */
+@keyframes intro-out {
+  0%   { opacity: 1; transform: scale(1); filter: blur(0); }
+  100% { opacity: 0; transform: scale(1.06); filter: blur(7px); visibility: hidden; }
+}
+
+/* ── reduced motion ────────────────────────────────────────────────────── */
+/* Someone who has asked their OS for less motion gets the wordmark, held
+   briefly, then a plain fade. No sweep, no travel, no blur. The branding still
+   happens; the vestibular trigger does not. */
+@media (prefers-reduced-motion: reduce) {
+  .intro { animation: intro-out-reduced 380ms ease-out 620ms forwards; }
+  .intro::before,
+  .intro-sweep,
+  .intro-node { display: none; }
+  .intro-ring { opacity: 1; transform: scale(1); animation: none; }
+  .intro-ch { transform: none; animation: none; }
+  .intro-rule { width: min(360px, 62vw); animation: none; }
+  .intro-sub { opacity: 1; animation: none; }
+
+  @keyframes intro-out-reduced {
+    to { opacity: 0; visibility: hidden; }
+  }
+}

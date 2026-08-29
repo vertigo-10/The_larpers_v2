@@ -14,27 +14,50 @@ dashboard makes it look.
 | Architecture | MLP, `6 → 64 → 32 → 3`, ReLU, PyTorch 2.2.2 |
 | Classes | `normal`, `dos_ddos`, `scan` |
 | Features | duration, packets, total_bytes, packets_per_sec, bytes_per_packet, dst_port |
-| Training data | **synthetic — not CIC-IDS2017, not captured traffic** |
-| Held-out accuracy | 100% on 1,200 synthetic samples |
+| Training data | CIC-IDS2017 (real capture) **combined with** generated SENTRY-shaped flows |
+| Held-out accuracy | 94.9% overall — 93.1% on CIC-IDS2017, 96.7% on SENTRY flow shapes |
 
-The model is the one in `backend/sentryv1.py`, persisted to servable artifacts
-(`model.pt`, `scaler.joblib`, `labels.joblib`) by `python -m backend.app.ml.train`.
-Inference at runtime is the real network — nothing is faked, and predictions come
-from a forward pass through those weights.
+The model is persisted to servable artifacts (`model.pt`, `scaler.joblib`,
+`labels.joblib`) by `python -m backend.app.ml.train`. Inference at runtime is the
+real network — nothing is faked, and predictions come from a forward pass through
+those weights.
 
-**The 100% is not a real-world detection rate.** The training set is three
-generated clusters that are cleanly separable by construction, so the number
-measures "can an MLP separate three synthetic blobs" and nothing more. It says
-nothing about performance on captured traffic. `metrics.json` carries the caveat
-in a `dataset_note` field, the sidebar never prints the figure bare (it reads
-"100% on synthetic data"), and the model page shows the full note under
-*Provenance* — so the disclaimer travels with the number rather than living only
-in this file.
+### Why it is not CIC-IDS2017 alone
 
-An earlier version of this README claimed CIC-IDS2017 and 99.2%. That was never
-true of this model. To make it true, retrain on real labelled captures and
-re-run the trainer — the serving path needs no changes, it reads the class list
-out of the artifacts.
+CIC-IDS2017 is a labelled capture of five working days, and it is the right
+source of real attack traffic. But a *flow* in that capture is one TCP
+connection, while SENTRY's collector aggregates per peer. A flood that CIC
+records as several thousand nine-packet connections arrives here as a single
+50,000-packet flow. The two do not look alike to a classifier.
+
+That difference was measured rather than assumed. A model trained on CIC alone
+scores **97.5%** on its own test split and then detects **0% of the floods and 0%
+of the port scans** this system actually produces — a calm green dashboard while
+nothing at all is caught. Training on the union of both domains fixes it, and
+the model page reports the two accuracies **separately and never averaged**,
+because one blended figure would describe neither.
+
+Two other things had to be handled, both visible on the model page:
+
+- **A label leak.** CIC ran every DoS/DDoS capture against one web server, so
+  almost every attack row carries destination port 80. Destination port alone
+  predicts the label 95% of the time. Untreated the network learns "port 80 =
+  attack", which inverts the moment it meets real traffic. Attack ports are
+  resampled from the benign distribution during loading; port alone then scores
+  54%. The *What the accuracy rests on* panel publishes that number.
+- **Coverage.** Three classes do not cover the fifteen labels in the capture.
+  Traffic from the other twelve — Patator, Bot, Infiltration, Heartbleed, the
+  web attacks — is still scored, because every flow gets a verdict, and it will
+  usually come back `normal`. The *Known blind spots* panel lists them by name
+  next to the accuracy figure.
+
+`metrics.json` carries all of this, the sidebar never prints the accuracy bare,
+and the model page shows the full provenance note above every number — so the
+caveats travel with the figure rather than living only in this file.
+
+An earlier version of this README claimed CIC-IDS2017 and 99.2% at a point when
+the model was trained on three synthetic clusters. The dataset is now real; the
+figure is lower than that claim, and it is measured.
 
 ## Run it locally
 
@@ -45,9 +68,25 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r backend/requirements.txt
 
 cp .env.example .env          # fine as-is for local development
-python -m backend.app.ml.train   # writes backend/artifacts/
 uvicorn backend.app.main:app --reload --port 8000
 ```
+
+Trained artifacts are committed under `backend/artifacts/`, so nothing needs
+training to run the app. To retrain:
+
+```bash
+# Default. Needs CIC-IDS2017 CSVs in data/cicids2017/ — the dataset is not in
+# the repo (~884MB); get it from https://www.unb.ca/cic/datasets/ids-2017.html
+python -m backend.app.ml.train
+
+python -m backend.app.ml.train --dataset synthetic   # no download required
+python -m backend.app.ml.train --dataset cicids      # see the section above
+```
+
+`--dataset synthetic` is the one to use if you just want the pipeline to run
+end to end without the download. It will not detect anything well; the accuracy
+it prints is close to 100% for the reason described above, and the dashboard
+will label it as such.
 
 Open <http://localhost:8000> and create an account. The first account in an
 organisation becomes its admin.
@@ -222,13 +261,15 @@ backend/
     security.py         bcrypt, JWT sessions, role guards, revocation, API keys
     engine.py           scoring loop, incident promotion, WebSocket fan-out
     ml/
-      train.py          trains from sentryv1.py, writes artifacts
+      cicids.py         streams the CIC-IDS2017 CSVs into the 6-feature vector
+      features.py       the one flow → vector function, shared by train and serve
+      train.py          trains, evaluates per domain, writes artifacts
       infer.py          loads artifacts, batched inference
     routers/
       auth.py           signup, login, logout, profile, password
       team.py           member management, audit log, collector keys
       api.py            flows, incidents, analytics, settings, reports
-  tests/                82 tests, no network or root required
+  tests/                337 tests, no network or root required
 agent/
   sentry_collector.py   packet capture → flow aggregation → POST /api/ingest
   requirements.txt      scapy + requests only, deliberately not the backend's

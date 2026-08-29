@@ -398,6 +398,10 @@ class StatusOut(BaseModel):
     framework: str
     architecture: Optional[str] = None
     dataset: str
+    # `dataset` is the machine key the training run wrote ("cicids2017+synthetic");
+    # `dataset_label` is the same thing spelled for a human. Both travel together
+    # because tests assert on the key and the UI prints the label.
+    dataset_label: Optional[str] = None
     dataset_note: Optional[str] = None
     accuracy: Optional[float] = None
     classes: List[str]

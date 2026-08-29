@@ -1,10 +1,19 @@
 /**
  * Model Performance.
  *
- * This page exists to stop the dashboard from being read as a real-world
- * accuracy claim. The deployed network scores 100% on its held-out split, which
- * is not a good result — it means the synthetic classes are trivially separable.
- * That caveat is rendered first, before any number, and is not dismissable.
+ * This page exists to stop the dashboard from being read as a stronger claim
+ * than the numbers support. The provenance note is rendered first, before any
+ * figure, and is not dismissable.
+ *
+ * Three panels here exist specifically to keep the headline honest, and none of
+ * them should be removed to tidy the layout:
+ *
+ *   - Accuracy by domain, because the model serves two very different notions
+ *     of "a flow" and one blended number would describe neither.
+ *   - What the accuracy rests on, because a port lookup and a traffic
+ *     classifier are indistinguishable from accuracy alone.
+ *   - Known blind spots, because three classes do not cover the fifteen
+ *     labels in the capture the score is quoted from.
  *
  * The "live agreement" section is a different measurement: it compares what the
  * traffic generator intended against what the model independently predicted, so
@@ -62,7 +71,7 @@
     // ── headline numbers ──────────────────────────────────────────────
     const cards = [
       { k: "Test accuracy", v: t.accuracy !== undefined ? `${t.accuracy}%` : "—",
-        d: `on ${esc(t.dataset || "unknown")} data`, cls: "" },
+        d: `on ${esc(t.dataset_label || t.dataset || "unknown")}`, cls: "" },
       { k: "Mean confidence", v: t.mean_confidence !== undefined ? `${t.mean_confidence}%` : "—",
         d: "how sure it is when it decides", cls: "" },
       { k: "Live agreement",
@@ -115,7 +124,7 @@
       ["Classes", status.classes.map((c) => classMeta(c).label).join(", ")],
       ["Epochs", t.epochs !== undefined ? String(t.epochs) : "—"],
       ["Trained", t.trained_at ? fmt.datetime(t.trained_at) : "—"],
-      ["Dataset", t.dataset || "unknown"],
+      ["Dataset", t.dataset_label || t.dataset || "unknown"],
       ["Server uptime", fmt.uptime(status.uptime_s)],
       ["API version", status.version]
     ];
@@ -131,8 +140,78 @@
           </div>`).join("")
       : `<div class="section-note">No feature list recorded.</div>`;
 
+    renderDomains(t);
+    renderAblation(t);
+    renderLimits(t);
     renderMatrix(t, status.classes);
     renderLive(m.live);
+  }
+
+  /**
+   * Accuracy split by data domain.
+   *
+   * The model is trained on two things at once: CIC-IDS2017, where a flow is a
+   * single TCP connection, and generated traffic matching the per-peer
+   * aggregation SENTRY's own collector performs. They are different enough that
+   * a model trained only on the first scores 97% on its own split and then
+   * classifies every flood this system sees as benign. One blended figure would
+   * hide that completely, so the two are always shown apart.
+   */
+  function renderDomains(t) {
+    const pd = t.per_domain;
+    if (!pd || Object.keys(pd).length < 2) return;
+
+    const LABELS = {
+      cicids: "CIC-IDS2017 · real capture",
+      synthetic: "SENTRY flow shapes · aggregated"
+    };
+    el("domain-body").innerHTML = Object.entries(pd).map(([name, d]) => {
+      const r = d.recall || {};
+      const cell = (v) => `<td class="mono">${v === undefined ? "—" : `${esc(v)}%`}</td>`;
+      return `<tr>
+        <td>${esc(LABELS[name] || name)}</td>
+        <td class="mono"><b>${esc(d.accuracy)}%</b></td>
+        ${cell(r.normal)}${cell(r.dos_ddos)}${cell(r.scan)}
+        <td class="mono">${esc(fmt.num(d.test_samples))}</td>
+      </tr>`;
+    }).join("");
+    el("domain-note").textContent = t.per_domain_note || "";
+    el("domain-panel").hidden = false;
+  }
+
+  /** Linear probes on feature subsets — see the panel comment in model.html. */
+  function renderAblation(t) {
+    const a = t.ablation;
+    if (!a) return;
+    const rows = [
+      ["Destination port alone", `${a.port_only}%`],
+      ["Traffic shape, no port", `${a.shape_only_no_port}%`],
+      ["Full network", `${t.accuracy}%`]
+    ];
+    el("ablation-list").innerHTML = rows.map(([k, v]) => `
+      <div class="kv"><span class="k">${esc(k)}</span><span class="v mono">${esc(v)}</span></div>`).join("");
+    el("ablation-note").textContent = a.note || "";
+    el("ablation-panel").hidden = false;
+  }
+
+  /**
+   * The attack families the model was never taught.
+   *
+   * Three classes, fifteen labels in the capture. Traffic from the other twelve
+   * still gets scored — it has to be, every flow gets a verdict — and will most
+   * often come back `normal`. Someone reading a 95% accuracy figure should be
+   * able to find that out on the same screen.
+   */
+  function renderLimits(t) {
+    const excluded = t.excluded_labels;
+    if (!excluded || !excluded.length) return;
+    el("limits-note").textContent = t.excluded_note || "";
+    el("limits-list").innerHTML = excluded.map((name) => `
+      <div class="kv">
+        <span class="k">${esc(name)}</span>
+        <span class="v" style="color:var(--amber)">not detected</span>
+      </div>`).join("");
+    el("limits-panel").hidden = false;
   }
 
   function renderMatrix(t, classes) {
@@ -159,9 +238,14 @@
         <tbody>${rows}</tbody>
       </table>
       <div class="section-note" style="padding:12px 0 0">
-        A perfectly diagonal matrix on synthetic data is a warning sign, not a
-        win: it means the generated classes never overlap. Real captured traffic
-        will not look like this.
+        ${(t.dataset || "").indexOf("cicids") !== -1
+          ? `Off-diagonal cells are expected here and are not a defect. A slow
+             HTTP flood and a large download genuinely resemble each other at
+             flow level, and a capture that produced a clean diagonal would
+             mean the classes had been made artificially separable.`
+          : `A perfectly diagonal matrix on synthetic data is a warning sign,
+             not a win: it means the generated classes never overlap. Real
+             captured traffic will not look like this.`}
       </div>`;
   }
 

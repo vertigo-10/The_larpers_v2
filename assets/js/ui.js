@@ -382,7 +382,8 @@
         } else if (typeof status.accuracy === "number") {
           // Always paired with the dataset, so the number is never read as a
           // real-world claim.
-          acc.textContent = `${status.accuracy}% on ${status.dataset} data`;
+          acc.textContent =
+            `${status.accuracy}% on ${status.dataset_label || status.dataset}`;
           acc.title = status.dataset_note || "";
         } else {
           acc.textContent = "not evaluated";

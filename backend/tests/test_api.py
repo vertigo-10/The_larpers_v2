@@ -362,9 +362,25 @@ def test_status_reports_real_model(client, org_a):
     body = r.json()
     assert body["model_ready"] is True
     assert set(body["classes"]) == {"dos_ddos", "normal", "scan"}
-    # The dataset must be labelled honestly, not as CIC-IDS2017.
-    assert body["dataset"] == "synthetic"
+
+    # The dataset label must describe what the served artifacts were actually
+    # trained on. This started life as `== "synthetic"`, guarding against the
+    # console claiming CIC-IDS2017 while running on generated clusters. The
+    # model is now genuinely trained on the capture, so the assertion checks
+    # the property that guard was protecting — the label matches the artifacts
+    # on disk — rather than a frozen string that would have to be edited every
+    # time the model is retrained, which is exactly how such a guard rots.
+    from backend.app.ml.infer import get_detector
+
+    assert body["dataset"] == get_detector().metrics.get("dataset")
+    assert body["dataset"] in {"synthetic", "cicids2017", "cicids2017+synthetic"}
     assert body["dataset_note"]
+
+    # Naming the capture obliges the note to state what it excludes, so nobody
+    # reads three classes as covering all fifteen labels in it.
+    if "cicids" in body["dataset"]:
+        assert "CIC-IDS2017" in body["dataset_note"]
+        assert get_detector().metrics.get("excluded_labels")
 
 
 def test_ingest_scores_with_real_model(client, org_a):

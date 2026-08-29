@@ -18,3 +18,16 @@ venv/
 .claude/
 .idea/
 .vscode/
+
+# Training corpora. CIC-IDS2017 is ~884MB of CSV plus a cached .npz of the
+# sampled rows; it is downloaded, not authored here. backend/app/ml/cicids.py
+# reads whatever lives in data/cicids2017/, so the path is the contract, not
+# the files. Fetch it from https://www.unb.ca/cic/datasets/ids-2017.html
+data/
+
+# Rejected model artifacts kept locally as evidence, never shipped. The
+# CIC-only model reports 97.5% accuracy and detects 0% of the floods and 0% of
+# the scans this system actually generates — loading it by accident would give
+# a calm green dashboard while nothing is caught. See backend/artifacts/ for
+# the model that is served.
+backend/artifacts-cicids/

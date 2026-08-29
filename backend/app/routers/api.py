@@ -96,6 +96,7 @@ def status_endpoint(user: User = Depends(current_user)):
         framework=m.get("framework", "PyTorch"),
         architecture=m.get("architecture"),
         dataset=m.get("dataset", "unknown"),
+        dataset_label=m.get("dataset_label"),
         dataset_note=m.get("dataset_note"),
         accuracy=m.get("accuracy"),
         classes=d.class_names,

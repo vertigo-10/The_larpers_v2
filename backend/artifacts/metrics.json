@@ -1,8 +1,9 @@
 {
-  "accuracy": 97.583,
-  "trained_at": "2026-08-27T04:21:05.279843+00:00",
+  "accuracy": 94.917,
+  "trained_at": "2026-08-28T18:54:52.338407+00:00",
   "framework": "PyTorch 2.2.2",
   "architecture": "MLP 6-64-32-3",
+  "preprocessing": "signed_log1p -> StandardScaler (fitted on train split only)",
   "features": [
     "duration",
     "packets",
@@ -16,47 +17,98 @@
     "normal",
     "scan"
   ],
-  "test_samples": 1200,
-  "train_samples": 4800,
-  "epochs": 60,
+  "test_samples": 24000,
+  "train_samples": 96000,
+  "epochs": 30,
   "confusion_matrix": [
     [
-      382,
-      3,
-      15
+      7722,
+      210,
+      52
     ],
     [
-      0,
-      390,
-      10
+      377,
+      7380,
+      234
     ],
     [
-      1,
-      0,
-      399
+      67,
+      280,
+      7678
     ]
   ],
   "per_class": {
     "dos_ddos": {
-      "precision": 99.74,
-      "recall": 95.5,
-      "f1": 97.57,
-      "support": 400
+      "precision": 94.56,
+      "recall": 96.72,
+      "f1": 95.63,
+      "support": 7984
     },
     "normal": {
-      "precision": 99.24,
-      "recall": 97.5,
-      "f1": 98.36,
-      "support": 400
+      "precision": 93.77,
+      "recall": 92.35,
+      "f1": 93.06,
+      "support": 7991
     },
     "scan": {
-      "precision": 94.1,
-      "recall": 99.75,
-      "f1": 96.84,
-      "support": 400
+      "precision": 96.41,
+      "recall": 95.68,
+      "f1": 96.04,
+      "support": 8025
     }
   },
-  "mean_confidence": 97.56,
-  "dataset": "synthetic",
-  "dataset_note": "Trained and evaluated on synthetically generated flows, not on captured traffic or CIC-IDS2017. These scores measure separation of three synthetic clusters and should not be read as real-world detection accuracy."
+  "mean_confidence": 93.43,
+  "ablation": {
+    "port_only": 54.02,
+    "shape_only_no_port": 73.65,
+    "note": "Linear probes on feature subsets, same split. If the headline accuracy is close to port_only, the model is a port lookup rather than a traffic classifier."
+  },
+  "per_domain": {
+    "cicids": {
+      "accuracy": 93.11,
+      "test_samples": 12002,
+      "recall": {
+        "dos_ddos": 93.89,
+        "normal": 87.56,
+        "scan": 97.83
+      }
+    },
+    "synthetic": {
+      "accuracy": 96.72,
+      "test_samples": 11998,
+      "recall": {
+        "dos_ddos": 99.57,
+        "normal": 97.11,
+        "scan": 93.52
+      }
+    }
+  },
+  "per_domain_note": "cicids = real per-connection flows from the public capture. synthetic = the per-peer aggregated shape SENTRY's own collector produces. The model must work on both; these are not averaged.",
+  "dataset": "cicids2017+synthetic",
+  "dataset_label": "CIC-IDS2017 + SENTRY flow shapes",
+  "dataset_note": "Trained on CIC-IDS2017 \u2014 a labelled capture of five working days recorded by the Canadian Institute for Cybersecurity in July 2017 \u2014 combined with generated flows matching the aggregation SENTRY's own collector performs. Both are needed: CIC-IDS2017 supplies real labelled attack traffic, but its flows are per-TCP-connection while SENTRY aggregates per peer, and a model trained on CIC alone detects none of the traffic this system actually receives. Accuracy is reported separately for each domain.",
+  "source_rows": 2830743,
+  "rows_per_class_sampled": 150000,
+  "excluded_labels": [
+    "FTP-Patator",
+    "SSH-Patator",
+    "Bot",
+    "Infiltration",
+    "Heartbleed",
+    "Web Attack - Brute Force",
+    "Web Attack - XSS",
+    "Web Attack - Sql Injection"
+  ],
+  "excluded_rows": 18028,
+  "excluded_note": "This model has three classes; the capture has fifteen labels. Brute-force, web-attack, botnet, infiltration and Heartbleed rows have no class to map to and were excluded from training and scoring. The model cannot detect those families \u2014 traffic of that kind will be scored as one of three classes that do not describe it.",
+  "malformed_rows_dropped": 115,
+  "port_decorrelation": {
+    "applied": true,
+    "rows_resampled": 150000,
+    "port_only_accuracy_before": 95.05,
+    "port_only_accuracy_after": 67.15,
+    "note": "CIC ran every DoS/DDoS capture against a single web server, so ~100% of attack rows carry destination port 80. Port is feature #6, so left untouched the network learns 'port 80 = attack' \u2014 which scores near-perfectly on this data and inverts in deployment, calling ordinary HTTP a flood and missing a flood aimed at 443. Attack rows therefore get a port resampled from the benign distribution. Benign and scan ports are left untouched, because a scan sweeping many ports is real behaviour rather than an artifact."
+  },
+  "synthetic_rows": 60000,
+  "cicids_rows": 60000
 }
