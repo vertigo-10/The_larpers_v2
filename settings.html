@@ -7,8 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="assets/css/styles.css?v=20260835" />
-<link rel="stylesheet" href="assets/css/intro.css?v=20260835" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260836" />
+<link rel="stylesheet" href="assets/css/intro.css?v=20260836" />
 </head>
 <body>
 <div class="app">
@@ -176,7 +176,7 @@
 
         <section class="panel" style="margin-bottom:14px" id="keys-panel" hidden>
           <div class="panel-head">
-            <span class="panel-title">Collector keys</span>
+            <span class="panel-title" id="keys-panel-title">Collector keys</span>
             <div class="right">
               <button class="btn btn-sm" id="btn-new-key">New key</button>
             </div>
@@ -184,7 +184,10 @@
 
           <div class="setting-row" style="display:block">
             <div class="setting-info" style="margin-bottom:10px">
-              <div class="d">
+              <!-- Replaced per org_type in settings.js: a household is
+                   connecting a device, not managing credentials. What is here
+                   is the company wording, and the fallback if copy is missing. -->
+              <div class="d" id="keys-desc">
                 A collector agent runs on a machine you are monitoring and posts
                 flows to <code>/api/ingest</code>. It authenticates with one of
                 these keys instead of an account, so it never holds a person's
@@ -275,10 +278,10 @@
   </div>
 </div>
 
-<script src="assets/js/intro.js?v=20260835"></script>
-<script src="assets/js/config.js?v=20260835"></script>
-<script src="assets/js/api.js?v=20260835"></script>
-<script src="assets/js/ui.js?v=20260835"></script>
-<script src="assets/js/settings.js?v=20260835"></script>
+<script src="assets/js/intro.js?v=20260836"></script>
+<script src="assets/js/config.js?v=20260836"></script>
+<script src="assets/js/api.js?v=20260836"></script>
+<script src="assets/js/ui.js?v=20260836"></script>
+<script src="assets/js/settings.js?v=20260836"></script>
 </body>
 </html>

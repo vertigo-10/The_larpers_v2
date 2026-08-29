@@ -269,13 +269,19 @@
   // else rather than rendering and then 403-ing on click.
   async function initKeys() {
     if (state.user.role !== "admin") return;
+    const copy = ui.orgCopy(state.user.org_type);
+    el("keys-panel-title").textContent = copy.keysTitle;
+    el("btn-new-key").textContent = copy.keysNewBtn;
+    el("keys-desc").innerHTML = copy.keysDesc;
     el("keys-panel").hidden = false;
     await paintKeys();
 
     el("btn-new-key").addEventListener("click", async () => {
+      // A household names the machine, not the credential, so the default
+      // differs too: "collector" is jargon on the consumer side.
       const label = prompt(
-        "Name this key — something identifying the machine it will run on:",
-        "collector"
+        copy.keysPrompt,
+        state.user.org_type === "consumer" ? "My computer" : "collector"
       );
       if (label === null) return;
 
@@ -288,7 +294,9 @@
         el("new-key-value").textContent = created.key;
         el("new-key-reveal").hidden = false;
         await paintKeys();
-        toast("Key created — copy it now.");
+        toast(state.user.org_type === "consumer"
+          ? "Setup code ready — copy it now."
+          : "Key created — copy it now.");
       } catch (err) {
         toast(err.message || "Could not create key.");
       } finally {
@@ -316,10 +324,13 @@
 
   async function paintKeys() {
     const box = el("keys-list");
+    const home = state.user.org_type === "consumer";
     try {
       const keys = await api.getKeys();
       if (!keys.length) {
-        box.innerHTML = "No collector keys yet.";
+        box.innerHTML = home
+          ? "No device connected yet."
+          : "No collector keys yet.";
         return;
       }
       box.innerHTML = keys.map((k) => {
@@ -339,7 +350,7 @@
             <span class="v">
               <span style="font-size:11px;color:var(--text-dim)">${esc(used)}</span>
               ${k.is_active
-                ? `<button class="btn btn-sm" data-revoke="${k.id}" style="margin-left:10px">Revoke</button>`
+                ? `<button class="btn btn-sm" data-revoke="${k.id}" style="margin-left:10px">${home ? "Disconnect" : "Revoke"}</button>`
                 : ""}
             </span>
           </div>`;
@@ -348,12 +359,14 @@
       box.querySelectorAll("[data-revoke]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const id = btn.getAttribute("data-revoke");
-          if (!confirm("Revoke this key? Any collector using it stops immediately.")) return;
+          if (!confirm(home
+            ? "Disconnect this device? It stops reporting to your dashboard immediately."
+            : "Revoke this key? Any collector using it stops immediately.")) return;
           btn.disabled = true;
           try {
             await api.revokeKey(id);
             await paintKeys();
-            toast("Key revoked.");
+            toast(home ? "Device disconnected." : "Key revoked.");
           } catch (err) {
             toast(err.message || "Could not revoke key.");
             btn.disabled = false;

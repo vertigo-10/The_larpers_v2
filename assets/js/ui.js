@@ -165,7 +165,15 @@
       settingsNameDesc: "Shown across the dashboard and on exported reports.",
       settingsScope: "Settings in <b>Detection</b> and <b>Alerting</b> are shared " +
         "by everyone in your organisation. <b>Display</b> settings are stored in " +
-        "this browser only."
+        "this browser only.",
+      keysTitle: "Collector keys",
+      keysNewBtn: "New key",
+      keysDesc: "A collector agent runs on a machine you are monitoring and " +
+        "posts flows to <code>/api/ingest</code>. It authenticates with one of " +
+        "these keys instead of an account, so it never holds a person's " +
+        "password and can be revoked on its own.",
+      keysPrompt: "Name this key — something identifying the machine it will " +
+        "run on:"
     },
     consumer: {
       teamNav: "Household",
@@ -187,7 +195,20 @@
       settingsNameDesc: "Shown across the top of every page.",
       settingsScope: "Settings in <b>Detection</b> and <b>Alerting</b> apply to " +
         "everyone in your household. <b>Display</b> settings are stored in this " +
-        "browser only."
+        "browser only.",
+      // A household has one collector and no reason to think of it as a
+      // credential. The API caps consumer orgs at a single active key
+      // (routers/team.py), so this is genuinely "the device", not a list.
+      keysTitle: "Connect a device",
+      keysNewBtn: "Connect a device",
+      keysDesc: "SENTRY watches your network from a small program — the " +
+        "collector — that runs on a computer in your home and reports what " +
+        "it sees. Connecting a device gives you a setup code to paste into " +
+        "it. The code is what identifies your household, so treat it like a " +
+        "password: anyone holding it can send traffic to your dashboard. " +
+        "Disconnect it here at any time and it stops working immediately.",
+      keysPrompt: "What should we call this device? Something you'll " +
+        "recognise, like \"living room laptop\":"
     }
   };
 
