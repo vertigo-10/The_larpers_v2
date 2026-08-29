@@ -148,6 +148,27 @@ def _load() -> Settings:
             "SENTRY_SIMULATOR_ENABLED\n[sentry] unless this is a demo deployment.\n\n"
         )
 
+    if s.is_production and s.database_url.startswith("sqlite"):
+        # A warning rather than a hard exit, because SQLite on a mounted volume
+        # is a perfectly good production database and there is no reliable way
+        # from here to tell a real mount from a container's own filesystem.
+        #
+        # It is loud because the failure is silent and total: on a platform that
+        # rebuilds the container each deploy — Render, Railway, Fly without a
+        # volume — the file goes with it, and every account created since the
+        # last deploy is gone. Nothing errors. Signup still works. People simply
+        # cannot log in with credentials that worked yesterday, which reads as a
+        # broken password rather than a missing disk.
+        sys.stderr.write(
+            "\n[sentry] WARNING: running in production on SQLite "
+            f"({s.database_url}).\n"
+            "[sentry] If that file is not on a persistent volume, every account\n"
+            "[sentry] is deleted on each deploy and logins will start failing\n"
+            "[sentry] for no visible reason. Set SENTRY_DATABASE_URL to a\n"
+            "[sentry] Postgres URL — note it must begin postgresql+psycopg://,\n"
+            "[sentry] not postgresql://, or the app will not start.\n\n"
+        )
+
     if s.is_production and "*" in s.cors_origins:
         sys.stderr.write(
             "\nFATAL: CORS is set to '*' in production. Credentials are sent as "
