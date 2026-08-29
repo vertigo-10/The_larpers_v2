@@ -244,7 +244,7 @@
         ["Model", health.model ? "loaded" : (status.model_error || "not loaded")],
         ["Model name", status.model_name],
         ["Classes", status.classes.join(", ")],
-        ["Training data", status.dataset],
+        ["Training data", status.dataset_label || status.dataset],
         ["Traffic simulator", status.simulator ? "running" : "off"],
         ["Uptime", fmt.uptime(status.uptime_s)],
         ["Version", status.version]

@@ -68,12 +68,26 @@ a { color: inherit; text-decoration: none; }
   padding: 14px 12px 20px;
 }
 
+/* An anchor, not a heading. Clicking the logo goes to your dashboard, which is
+   what every other product on the web has trained people to expect. *Which*
+   dashboard depends on the account type, so ui.js owns the href — see
+   landingFor(). */
 .brand {
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 4px 6px 16px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 10px;
+  transition: opacity 120ms ease;
 }
+a.brand:hover { opacity: 0.85; }
+a.brand:hover .brand-mark { box-shadow: 0 0 22px rgba(47, 224, 138, 0.55); }
+/* Keyboard users need to see where they are. The sidebar already has 12px of
+   side padding, so the ring has room and nothing shifts. */
+a.brand:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
 .brand-mark {
   width: 30px; height: 30px;
   display: grid; place-items: center;

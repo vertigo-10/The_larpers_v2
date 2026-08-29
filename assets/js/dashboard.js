@@ -95,7 +95,8 @@
     el("foot-latency").style.color = status.model_ready ? "" : "var(--red)";
 
     const pill = el("class-pill");
-    pill.textContent = `${status.classes.length} classes · ${status.dataset}`;
+    pill.textContent =
+      `${status.classes.length} classes · ${status.dataset_label || status.dataset}`;
     pill.title = status.dataset_note || "";
 
     if (!status.model_ready) {

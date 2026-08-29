@@ -116,6 +116,22 @@
     return user && user.org_type === "consumer" ? "home-index.html" : "index.html";
   }
 
+  /**
+   * Best guess at the reader's dashboard before /api/me has answered.
+   *
+   * The sidebar is drawn immediately so the page does not flash an empty rail,
+   * which means the brand link needs an href a beat before the account type is
+   * known. Scoped pages already declare who they are for, so those are exact.
+   * The three shared pages — profile, team, settings — do not, and fall back to
+   * the enterprise dashboard; a household clicking through in that window is
+   * bounced to their own by the scope guard, so the worst case is one extra
+   * redirect, not a wrong destination. The href is corrected below as soon as
+   * the real answer arrives.
+   */
+  function scopedLanding() {
+    return landingFor({ org_type: document.body.getAttribute("data-org-scope") });
+  }
+
   const FOOT_NAV = [
     { label: "Profile", href: "profile.html", key: "profile", icon: "user" },
     { label: "Team", href: "team.html", key: "team", icon: "users" },
@@ -275,13 +291,14 @@
       </a>`).join("");
 
     el.innerHTML = `
-      <div class="brand">
+      <a class="brand" id="sb-brand" href="${esc(scopedLanding())}"
+         title="Back to the dashboard">
         <div class="brand-mark">${icon("shieldCheck", 17)}</div>
         <div>
           <div class="brand-name">SENTRY<span>NN</span></div>
           <div class="brand-sub">Threat Detection</div>
         </div>
-      </div>
+      </a>
 
       <div class="node-card">
         <div class="node-card-top">
@@ -369,6 +386,12 @@
         window.location.replace(landingFor(user));
         return;
       }
+
+      // Now the account type is known for certain, so the brand link can stop
+      // guessing. Matters on the three unscoped pages, where the guess above is
+      // the enterprise dashboard regardless of who is reading.
+      const brand = document.getElementById("sb-brand");
+      if (brand) brand.setAttribute("href", landingFor(user));
 
       if (model) model.textContent = status.model_name || "model";
       if (org) org.textContent = user.org_name || "";

@@ -116,6 +116,35 @@ def test_landing_rule_matches_the_pages_on_disk() -> None:
     )
 
 
+def test_brand_link_goes_to_the_reader_s_own_dashboard() -> None:
+    """
+    Clicking the logo must respect the split.
+
+    It is the one link on the page that means "home", so hardcoding it to
+    index.html would send every household to the enterprise console. The scope
+    guard would bounce them back, but a logo that visibly bounces reads as
+    broken. The href has to come from the landing rule, in both the markup
+    ui.js renders and the correction it applies once the account is known.
+    """
+    src = (ROOT / "assets" / "js" / "ui.js").read_text(encoding="utf-8")
+
+    brand = re.search(r'<a class="brand"[^>]*href="\$\{([^}]+)\}"', src)
+    assert brand, (
+        "the sidebar logo is not an anchor with a templated href — either it is "
+        "no longer a link, or its destination has been hardcoded."
+    )
+    assert "Landing" in brand.group(1) or "landingFor" in brand.group(1), (
+        f"the logo's href is built from {brand.group(1)!r} rather than the "
+        "landing rule, so it can disagree with landingFor()."
+    )
+    assert re.search(r'sb-brand[^\n]*\n?[^\n]*landingFor\(user\)', src) or (
+        'brand.setAttribute("href", landingFor(user))' in src
+    ), (
+        "nothing corrects the logo's href once /api/me answers. On the unscoped "
+        "pages the initial value is only a guess."
+    )
+
+
 @pytest.mark.parametrize("page", CONSUMER_PAGES + COMPANY_PAGES)
 def test_scoped_pages_load_the_script_that_enforces_the_scope(page: str) -> None:
     """The attribute is inert markup unless ui.js runs on the page."""
