@@ -143,28 +143,63 @@ def test_intro_cannot_trap_the_operator() -> None:
     )
 
 
-def test_intro_is_ungated_and_therefore_must_stay_harmless() -> None:
-    """
-    The sequence plays on every page load, by request.
+def _intro_js() -> str:
+    return (ROOT / "assets" / "js" / "intro.js").read_text(encoding="utf-8")
 
-    This is a multi-page app, so that means every sidebar click too. The whole
-    reason that is tolerable is that the overlay cannot be waited on — it is
-    pointer-transparent and self-clearing, checked above. This test exists to
-    pair the two decisions: if a gate is ever reintroduced it should be a
-    deliberate change here, and if the animation is ever made blocking, running
-    it on every navigation stops being acceptable.
+
+def test_intro_plays_on_arrival_not_on_every_navigation() -> None:
     """
-    js = (ROOT / "assets" / "js" / "intro.js").read_text(encoding="utf-8")
-    assert "sessionStorage" not in js and "localStorage" not in js, (
-        "intro.js gates on web storage again, so the animation no longer plays "
-        "on every load. If that is intended, update this test to say so."
+    The overlay is gated per session, not per document load.
+
+    Every sidebar click here is a full page load. Ungated, the sequence fires on
+    all of them, which is how a piece of branding becomes a tic. sessionStorage
+    is the right lifetime: it survives navigation within a visit and resets when
+    the tab is closed. localStorage would be wrong in the other direction —
+    shown once ever, including across browser restarts.
+    """
+    js = _intro_js()
+    assert "sessionStorage" in js, (
+        "intro.js no longer gates on sessionStorage, so the animation replays on "
+        "every sidebar click."
     )
-    assert "pointer-events" in (
-        ROOT / "assets" / "css" / "intro.css"
-    ).read_text(encoding="utf-8"), (
-        "an ungated animation on every navigation is only acceptable while it "
-        "is click-through."
+    assert "localStorage" not in js, (
+        "intro.js gates on localStorage, which would show the animation once and "
+        "then never again, including after a browser restart."
     )
+
+
+def test_intro_entry_pages_exist_and_are_entry_points() -> None:
+    """
+    The gate names pages as strings, so a rename silently disables the animation
+    on that page — no error, it simply stops appearing. These are also the only
+    pages it should fire on: a mid-session page in this list would put a curtain
+    on a sidebar click.
+    """
+    listed = set(re.findall(r'"([\w.-]+\.html)":\s*"sentry\.intro\.', _intro_js()))
+    assert listed, "no entry pages found in intro.js — has the gate been removed?"
+
+    on_disk = {p.name for p in ROOT.glob("*.html")}
+    assert listed <= on_disk, (
+        f"intro.js gates on {sorted(listed - on_disk)}, which no longer exist. "
+        "The animation is silently dead on those pages."
+    )
+
+    entry_points = {"login.html", "signup.html", "join.html",
+                    "index.html", "home-index.html"}
+    assert listed <= entry_points, (
+        f"{sorted(listed - entry_points)} are mid-session pages, not arrivals. "
+        "Playing the sequence there interrupts navigation."
+    )
+
+
+def test_both_landing_dashboards_get_the_intro() -> None:
+    """Consumer and enterprise accounts should have the same arrival, not one."""
+    listed = set(re.findall(r'"([\w.-]+\.html)":\s*"sentry\.intro\.', _intro_js()))
+    for landing in ("index.html", "home-index.html"):
+        assert landing in listed, (
+            f"{landing} is a landing page but gets no opening sequence, so one "
+            "account type arrives to a plain load and the other does not."
+        )
 
 
 def test_reduced_motion_is_honoured() -> None:

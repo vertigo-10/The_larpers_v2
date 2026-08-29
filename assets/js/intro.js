@@ -5,25 +5,33 @@
  * first on every page so it covers the initial paint rather than appearing
  * over an already-drawn dashboard.
  *
- * PLAYS ON EVERY LOAD
- * -------------------
- * This is a multi-page app with no client router, so every click on the sidebar
- * is a full document load and the sequence runs on each one. That is deliberate
- * — it is the requested behaviour — and it is only tolerable because of the
- * next section: the overlay is decorative and never stands between an operator
- * and the page.
+ * WHERE IT PLAYS
+ * --------------
+ * On arrival, not on navigation. This is a multi-page app with no client
+ * router, so every sidebar click is a full document load; running the sequence
+ * on each one turns a piece of branding into a tic.
  *
- * If it ever needs to be limited to the first load of a session, the gate is a
- * per-session storage key checked here, not a change to the CSS.
+ * There are exactly two moments that are an arrival rather than a step:
+ *
+ *   1. The front door — login, signup, join. The first thing a visitor sees.
+ *   2. The first dashboard after signing in — index.html or home-index.html.
+ *
+ * They get separate keys deliberately, so the sequence bookends the login:
+ * once on the way in, once when the console appears. Everything past that is
+ * navigation within a session and stays silent. Closing the tab and coming
+ * back is a new session and plays again.
+ *
+ * The gate lives here rather than in the page list because a rule spread over
+ * sixteen hand-written files drifts. The script loads everywhere and decides
+ * for itself; the cost is a few KB on pages that will not use it.
  *
  * WHY IT NEVER BLOCKS
  * -------------------
- * This matters more now that it runs on every navigation. The overlay is
- * `pointer-events: none` from the first frame, so the dashboard underneath is
- * clickable for the whole 1.9 seconds — an operator mid-incident can click
- * straight through it. It fades via a CSS animation with `forwards` fill, so it
- * clears even if this script dies partway. The removal below is cleanup, not
- * the mechanism. See intro.css.
+ * The overlay is `pointer-events: none` from the first frame, so the dashboard
+ * underneath is clickable for the whole 1.9 seconds — an operator arriving
+ * mid-incident can click straight through it. It fades via a CSS animation with
+ * `forwards` fill, so it clears even if this script dies partway. The removal
+ * below is cleanup, not the mechanism. See intro.css.
  *
  * Deliberately dependency-free and self-executing: it must run before
  * config.js, api.js and the page module, so it cannot rely on SENTRY_UI.
@@ -33,6 +41,42 @@
 
   var LIFETIME_MS = 2600;   // comfortably past the CSS timeline
   var WORD = "SENTRY";
+
+  // Page → which arrival it counts as. Two keys, so signing in shows the
+  // sequence a second time; anything not listed here never shows it at all.
+  var GATES = {
+    "login.html":      "sentry.intro.door",
+    "signup.html":     "sentry.intro.door",
+    "join.html":       "sentry.intro.door",
+    "index.html":      "sentry.intro.app",
+    "home-index.html": "sentry.intro.app"
+  };
+
+  // A bare origin serves index.html, so the empty path is the enterprise
+  // dashboard rather than an unknown page.
+  function pageName() {
+    var path = window.location.pathname;
+    var last = path.slice(path.lastIndexOf("/") + 1);
+    return last || "index.html";
+  }
+
+  // The `?intro` escape hatch exists so the sequence can be reviewed from any
+  // page without clearing storage by hand.
+  var forced = window.location.search.indexOf("intro") !== -1;
+  var key = GATES[pageName()];
+
+  if (!forced) {
+    if (!key) return;                       // mid-session navigation
+    try {
+      if (window.sessionStorage.getItem(key) === "1") return;
+      window.sessionStorage.setItem(key, "1");
+    } catch (e) {
+      // Storage throws in private modes and under some cookie policies.
+      // Failing closed is right: a missing animation is a cosmetic loss, one
+      // that replays on every load is the thing being fixed here.
+      return;
+    }
+  }
 
   // Node positions are fixed rather than random so the composition is the same
   // every time — a logo that reshuffles itself does not read as a logo. Values

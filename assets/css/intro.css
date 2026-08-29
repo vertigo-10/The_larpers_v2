@@ -14,10 +14,9 @@
    Belt, braces and a third thing, because the failure mode is a security tool
    that cannot be operated during an incident.
 
-   The whole sequence is ~1.9s and runs on every page load, including every
-   sidebar click — see intro.js. That is only acceptable because of rule 2: the
-   dashboard underneath stays clickable throughout, so the animation is
-   something you can see past rather than something you must wait out.
+   The whole sequence is ~1.9s and plays on arrival — the front door, and the
+   first dashboard after signing in — not on every sidebar click. intro.js owns
+   that rule.
    ────────────────────────────────────────────────────────────────────────── */
 
 .intro {
