@@ -85,6 +85,17 @@ def _org_settings(db: Session, org_id: int) -> OrgSettings:
 
 
 # ── status ────────────────────────────────────────────────────────────────
+# v2 is the first model trained on real captured traffic. v1 learned three
+# generated clusters; this one learns CIC-IDS2017 combined with SENTRY-shaped
+# flows, over a different preprocessing pipeline. Same architecture, but the
+# weights and what they mean are not comparable, so it does not share a name.
+#
+# A training run may record its own name in metrics.json, which wins — the point
+# of the fallback is that a model without one still identifies itself rather
+# than showing blank.
+DEFAULT_MODEL_NAME = "sentry-ddos-v2"
+
+
 @router.get("/status", response_model=StatusOut)
 def status_endpoint(user: User = Depends(current_user)):
     d = get_detector()
@@ -92,7 +103,7 @@ def status_endpoint(user: User = Depends(current_user)):
     return StatusOut(
         model_ready=d.ready,
         model_error=d.error,
-        model_name="sentry-ddos-v1",
+        model_name=m.get("model_name") or DEFAULT_MODEL_NAME,
         framework=m.get("framework", "PyTorch"),
         architecture=m.get("architecture"),
         dataset=m.get("dataset", "unknown"),
