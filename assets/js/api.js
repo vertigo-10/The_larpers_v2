@@ -226,6 +226,20 @@
     createKey: (label) => post("/api/team/keys", { label }),
     revokeKey: (id) => del(`/api/team/keys/${id}`),
 
+    // ── flow exporters ──────────────────────────────────────────────────
+    // NetFlow has no authentication, so registering a source address is the
+    // decision about whose traffic we ingest. Every write here is admin-only
+    // server-side.
+    getExporters: () => get("/api/exporters"),
+    createExporter: (data) => post("/api/exporters", data),
+    updateExporter: (id, data) => patch(`/api/exporters/${id}`, data),
+    deleteExporter: (id) => del(`/api/exporters/${id}`),
+    // Already filtered server-side to senders this org can prove adjacency to.
+    // An empty list is the normal answer and must not be read as an error —
+    // most orgs will never see anything here.
+    getUnclaimedExporters: () => get("/api/exporters/unclaimed"),
+    getCollectorStatus: () => get("/api/exporters/status"),
+
     // ── reports ─────────────────────────────────────────────────────────
     getReport: (days = 7) => get(`/api/reports/summary?days=${days}`),
 

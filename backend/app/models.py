@@ -368,6 +368,21 @@ class Flow(Base):
     ts: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
 
     src_ip: Mapped[str] = mapped_column(String(45))
+    # Which target the flow was aimed at. Not a model feature — the classifier
+    # never sees an address, deliberately, because learning that "traffic to
+    # 10.0.0.7 is bad" is memorising a host rather than recognising an attack.
+    #
+    # It is stored because the aggregate detectors need to know what a group of
+    # flows is converging *on*. Slow-DoS is the clearest case: thirty idle
+    # connections spread across thirty servers is a quiet afternoon, and the
+    # same thirty aimed at one of them is an outage in progress. Without this
+    # column those two are the same row set.
+    #
+    # Empty string, not NULL, means "we were never told" — the ingest API makes
+    # it optional and flows recorded before this column existed genuinely have
+    # no answer. Detectors must skip those rather than group them all together
+    # under a shared blank, which would invent a target that does not exist.
+    dst_ip: Mapped[str] = mapped_column(String(45), default="")
     dst_port: Mapped[int] = mapped_column(Integer)
     protocol: Mapped[str] = mapped_column(String(10))
     node: Mapped[str] = mapped_column(String(60), index=True)
@@ -421,6 +436,22 @@ class Incident(Base):
     peak_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     peak_bps: Mapped[float] = mapped_column(Float, default=0.0)
     severity: Mapped[str] = mapped_column(String(20), default="medium")
+
+    # One sentence saying what was actually observed, written by whichever
+    # detector opened the row.
+    #
+    # It exists because not every incident comes from the classifier. A model
+    # detection is self-describing — the label is the finding, and
+    # `peak_confidence` says how sure it was. A rule-based aggregate detection
+    # is not: "slow_dos from 203.0.113.9" leaves out the only facts an operator
+    # needs, which are how many connections, against what, and how idle they
+    # were. Those live here rather than in three new columns because they
+    # differ per detector and none of them is ever filtered or sorted on.
+    #
+    # NULL on every incident the classifier opened, and on every incident that
+    # predates this column. The UI shows the line only when there is one, so a
+    # null reads as "nothing further to add" rather than as missing data.
+    detail: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=IncidentStatus.open.value)
     mitigated: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -534,6 +565,112 @@ class Anomaly(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     acknowledged_by: Mapped[Optional["User"]] = relationship()
+
+
+class FlowExporter(Base):
+    """A switch, router or firewall registered to send flow records to us.
+
+    NetFlow, IPFIX and sFlow have no authentication of any kind. There is no
+    key, no handshake, no signature — anything that can reach the collector's
+    UDP port can send records claiming to describe any traffic it likes. The
+    only identifying signal in the datagram is the source IP of the packet
+    itself, and even that is spoofable on a network that permits it.
+
+    So the trust model is registration, not authentication: an operator states
+    in advance "my firewall exports from 203.0.113.5", and the collector will
+    only attribute flows to that org from that address. Data from an address
+    nobody has claimed lands in UnclaimedExporter and is not scored.
+
+    That is weaker than a signed agent and it should be described that way to
+    customers. What it buys is a ten-minute setup on hardware they already own,
+    which is the difference between a trial that starts today and one that
+    waits on a change window.
+    """
+
+    __tablename__ = "flow_exporters"
+    __table_args__ = (
+        # Globally unique, deliberately not unique-per-org. The collector
+        # resolves an incoming packet to an org *by source IP alone*; if two
+        # orgs could register 203.0.113.5, that lookup would be ambiguous and
+        # one tenant's traffic could be attributed to the other. A global
+        # constraint turns that into a visible registration conflict instead of
+        # a silent cross-tenant leak.
+        UniqueConstraint("source_ip", name="uq_flow_exporter_source_ip"),
+        Index("ix_flow_exporters_org_enabled", "org_id", "enabled"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), index=True)
+
+    # 45 chars so an IPv6 literal fits, matching Flow.src_ip.
+    source_ip: Mapped[str] = mapped_column(String(45), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), default="")
+
+    # Which Node these flows are attributed to on the dashboard. Kept as a
+    # label rather than a FK because nodes are created lazily by the engine and
+    # an exporter may be registered before its node exists.
+    node_label: Mapped[str] = mapped_column(String(60), default="")
+
+    # Learned from the wire on first packet ("v5" | "v9" | "ipfix"), not
+    # configured. Operators routinely do not know which their device sends, and
+    # asking them to guess produces wrong answers that are hard to debug.
+    version: Mapped[str] = mapped_column(String(10), default="")
+
+    # 1 means unsampled. Above 1, counters are multiplied up on ingest.
+    #
+    # This is the configured override. Devices are supposed to advertise their
+    # sampling rate in-band, and where they do the collector uses that. Many
+    # do not, or advertise 0, and a 1-in-1000 sample scored as if it were the
+    # full picture understates every volume feature by three orders of
+    # magnitude — the model would see a flood as a trickle.
+    sampling_rate: Mapped[int] = mapped_column(Integer, default=1)
+
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    created_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
+    packets_received: Mapped[int] = mapped_column(Integer, default=0)
+    flows_received: Mapped[int] = mapped_column(Integer, default=0)
+
+    # The most recent reason a packet from this exporter produced no usable
+    # flows. Almost always "awaiting template" on a v9 device that has not sent
+    # its template refresh yet, which is normal for the first ~10 minutes and
+    # alarming if it never clears. Surfacing it turns the commonest support
+    # ticket ("I configured it and see nothing") into a self-serve answer.
+    last_error: Mapped[str] = mapped_column(String(200), default="")
+
+
+class UnclaimedExporter(Base):
+    """Flow records arriving from an address no org has registered.
+
+    Kept because the alternative is dropping them silently, and "I pointed my
+    firewall at you and nothing happened" is then unanswerable. This table lets
+    the answer be "we are receiving your packets, the address just is not
+    registered yet".
+
+    It is a separate table rather than a FlowExporter with a null org_id on
+    purpose. Every tenant-scoped query in this app filters on org_id; a null
+    there would be a row that silently escapes that filter, and in a security
+    product that is exactly the bug you cannot afford. Unclaimed data has no
+    owner, so it lives somewhere that has no owner column to get wrong.
+    """
+
+    __tablename__ = "unclaimed_exporters"
+    __table_args__ = (
+        UniqueConstraint("source_ip", name="uq_unclaimed_exporter_source_ip"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_ip: Mapped[str] = mapped_column(String(45), nullable=False)
+    version: Mapped[str] = mapped_column(String(10), default="")
+
+    first_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    packets_received: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AuditLog(Base):

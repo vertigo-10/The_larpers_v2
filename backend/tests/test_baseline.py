@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from backend.app import baseline as bl  # noqa: E402
 from backend.app.db import SessionLocal, init_db  # noqa: E402
 from backend.app.main import app  # noqa: E402
-from backend.app.models import Anomaly, Baseline, Flow  # noqa: E402
+from backend.app.models import Anomaly, Baseline, Flow, Incident  # noqa: E402
 
 GOOD_PW = "correct-horse-battery-staple"
 
@@ -366,6 +366,340 @@ def test_replaying_the_same_window_is_bounded(client, alpha):
         assert after - before <= 12 * len(bl.METRICS)
     finally:
         db.close()
+
+
+# ── slow denial of service ────────────────────────────────────────────────
+# The rule that catches what neither the classifier nor the z-score can.
+#
+# Most flows written below carry `prediction="normal"`, and that is not a
+# shortcut — it is the premise. A held-open connection sending a header every
+# forty seconds genuinely is a normal flow in the model's six features, and the
+# deployed model does label it that way (measured: 0.851 for a 60s hold). If
+# these tests passed by marking the traffic malicious first, they would be
+# testing nothing.
+#
+# The exception is deliberate and has its own test. Past about three minutes of
+# hold time the same model starts calling the same connections `dos_ddos`, so a
+# real attack seen through a 60s export timeout arrives under both labels at
+# once. `test_an_attack_split_across_two_labels_is_still_one_group` is the one
+# that would have caught the version of this detector that only looked at flows
+# the model had waved through.
+#
+# The false-positive tests matter as much as the detection ones. A datacentre is
+# full of traffic shaped almost exactly like a slow DoS — connection pools,
+# brokers, IDLE sessions — and a detector that reported those would be muted
+# inside a day, which is the same as not having one.
+
+# A Wednesday, an hour no test above touches, so slow-DoS flows cannot disturb
+# a baseline bucket another test is asserting on.
+SLOW_NOW = datetime(2026, 3, 4, 9, 0, tzinfo=timezone.utc)
+
+# RFC 5737 documentation addresses are *not* usable here: ipaddress marks
+# 203.0.113.0/24 and friends as non-global, so the external-source guard would
+# correctly reject them and every detection test would silently pass for the
+# wrong reason. These are real routable addresses instead.
+ATTACKER = "45.33.32.156"
+VICTIM = "10.20.0.7"
+
+
+def _slow_flows(
+    org_id, count, ts, *, src_ip=ATTACKER, dst_ip=VICTIM, dst_port=443,
+    duration=61.0, total_bytes=280.0, packets=4, prediction="normal", tag="s",
+):
+    """Write `count` flows of one shape. Defaults are the slow-DoS shape."""
+    db = SessionLocal()
+    try:
+        for i in range(count):
+            db.add(Flow(
+                org_id=org_id, flow_ref=f"sd-{tag}-{ts.timestamp()}-{i}", ts=ts,
+                src_ip=src_ip, dst_ip=dst_ip, dst_port=dst_port, protocol="TCP",
+                node="EDGE-01", duration=duration, packets=packets,
+                total_bytes=total_bytes, bytes_per_sec=total_bytes / duration,
+                prediction=prediction, confidence=0.97,
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _detect(org_id, end, window=WINDOW):
+    db = SessionLocal()
+    try:
+        found = bl.detect_slow_dos(db, org_id, end - window, end, window)
+        db.commit()
+        return found
+    finally:
+        db.close()
+
+
+def _incidents(org_id):
+    db = SessionLocal()
+    try:
+        return db.query(Incident).filter(
+            Incident.org_id == org_id,
+            Incident.label == bl.SLOW_DOS_LABEL,
+        ).order_by(Incident.id).all()
+    finally:
+        db.close()
+
+
+def test_a_slow_dos_is_caught_although_every_flow_looks_normal(client, alpha):
+    """The detection this rule exists for.
+
+    Forty connections held open for a minute each, moving under three hundred
+    bytes apiece. Individually each one is an idle keepalive and the model is
+    right to wave it through. Together they are a web server with no workers
+    left.
+    """
+    org = alpha["org_id"]
+    end = SLOW_NOW
+    _slow_flows(org, 40, end - timedelta(minutes=1))
+
+    found = _detect(org, end)
+    assert len(found) == 1, "the group was not recognised"
+    assert found[0]["src_ip"] == ATTACKER
+    assert found[0]["dst_ip"] == VICTIM
+    assert found[0]["flows"] == 40
+
+    rows = _incidents(org)
+    assert len(rows) == 1
+    assert rows[0].status == "open"
+    assert rows[0].flow_count == 40
+    # No model was consulted, so there is no confidence to report. A number here
+    # would be an invented probability.
+    assert rows[0].peak_confidence == 0.0
+
+
+def test_the_incident_says_what_was_actually_observed(client, alpha):
+    """"Slow DoS from 45.33.32.156" is a label, not evidence."""
+    rows = _incidents(alpha["org_id"])
+    assert rows
+    detail = rows[0].detail
+    assert detail
+    assert f"{VICTIM}:443" in detail, "an operator cannot tell what was attacked"
+    assert "40 connections" in detail
+    assert "packets/sec" in detail
+    assert len(detail) <= 200, "would not fit the column"
+
+
+def test_a_handful_of_idle_connections_is_not_an_incident(client, beta):
+    """Five long-lived idle flows is a phone checking mail."""
+    org = beta["org_id"]
+    end = SLOW_NOW + timedelta(hours=1)
+    _slow_flows(org, 5, end - timedelta(minutes=1), tag="few")
+    assert _detect(org, end) == []
+    assert _incidents(org) == []
+
+
+def test_a_busy_web_server_is_not_a_slow_dos(client, beta):
+    """Volume alone must not fire it, or every popular service is an incident."""
+    org = beta["org_id"]
+    end = SLOW_NOW + timedelta(hours=2)
+    # Four hundred real requests: short, and carrying an actual page each.
+    _slow_flows(org, 400, end - timedelta(minutes=1), tag="busy",
+                duration=0.8, total_bytes=48_000.0, packets=60)
+    assert _detect(org, end) == []
+    assert _incidents(org) == []
+
+
+def test_long_lived_transfers_are_not_a_slow_dos(client, beta):
+    """Duration alone must not fire it either — that is what a download is."""
+    org = beta["org_id"]
+    end = SLOW_NOW + timedelta(hours=3)
+    _slow_flows(org, 60, end - timedelta(minutes=1), tag="dl",
+                duration=240.0, total_bytes=90_000_000.0, packets=70_000)
+    assert _detect(org, end) == []
+    assert _incidents(org) == []
+
+
+def test_an_internal_connection_pool_is_not_a_slow_dos(client, beta):
+    """The false positive that would have got this feature switched off.
+
+    Fifty pooled connections from an application server to a database match the
+    shape exactly: many flows, one port, minute-long, almost no bytes, a packet
+    every few seconds. Nothing about the traffic distinguishes it from an
+    attack — only where it came from does.
+    """
+    org = beta["org_id"]
+    end = SLOW_NOW + timedelta(hours=4)
+    _slow_flows(org, 50, end - timedelta(minutes=1), tag="pool",
+                src_ip="10.20.0.31", dst_ip="10.20.0.44", dst_port=5432)
+    assert _detect(org, end) == [], "reported an ordinary connection pool"
+    assert _incidents(org) == []
+
+    # And the guard is about origin, not about the port or the target: the same
+    # database, the same shape, reached from the internet, does fire.
+    end2 = end + WINDOW
+    _slow_flows(org, 50, end2 - timedelta(minutes=1), tag="pool-ext",
+                src_ip="45.33.32.200", dst_ip="10.20.0.44", dst_port=5432)
+    assert len(_detect(org, end2)) == 1
+
+
+def test_the_same_shape_spread_thin_is_not_a_slow_dos(client, alpha):
+    """One idle connection each to sixty servers is a crawler, not an outage.
+
+    This is what the destination address buys. Grouping on the source alone,
+    these sixty flows and a sixty-socket attack are the same rows.
+    """
+    org = alpha["org_id"]
+    end = SLOW_NOW + timedelta(hours=5)
+    for i in range(60):
+        _slow_flows(org, 1, end - timedelta(minutes=1), tag=f"thin{i}",
+                    src_ip="45.33.32.9", dst_ip=f"10.20.9.{i + 1}")
+    assert _detect(org, end) == []
+
+
+def test_flows_with_no_destination_are_never_grouped(client, alpha):
+    """Blank means "the exporter never told us", not "the same host".
+
+    Every flow recorded before `dst_ip` existed has an empty one. Treating them
+    as a group would read the whole archive as one enormous attack on a host
+    that does not exist.
+    """
+    org = alpha["org_id"]
+    end = SLOW_NOW + timedelta(hours=6)
+    _slow_flows(org, 200, end - timedelta(minutes=1), tag="blank", dst_ip="")
+    assert _detect(org, end) == []
+
+
+def test_an_attack_split_across_two_labels_is_still_one_group(client, alpha):
+    """The bug that a benign-only filter would have introduced.
+
+    Exporters emit on an active timeout of about 60s, so one held-open
+    connection produces a run of 60s records plus a longer one when it finally
+    closes. The deployed model labels those differently — 60s reads as normal,
+    300s reads as dos_ddos — so a single slowloris arrives under two labels.
+
+    A detector that only re-examined flows the model waved through would keep
+    the 25 normal ones, drop the 25 flagged ones, fall under the threshold and
+    report nothing at all. Both halves have to count.
+    """
+    org = alpha["org_id"]
+    end = SLOW_NOW + timedelta(hours=7)
+    src, victim = "45.33.32.77", "10.20.4.4"
+    # Neither half would reach SLOW_DOS_MIN_FLOWS on its own.
+    _slow_flows(org, 25, end - timedelta(minutes=1), tag="split-a",
+                src_ip=src, dst_ip=victim, duration=61.0, prediction="normal")
+    _slow_flows(org, 25, end - timedelta(minutes=1), tag="split-b",
+                src_ip=src, dst_ip=victim, duration=300.0, prediction="dos_ddos")
+    assert bl.SLOW_DOS_MIN_FLOWS > 25, "the halves must each be under the bar"
+
+    found = [g for g in _detect(org, end) if g["src_ip"] == src]
+    assert len(found) == 1, "the attack was split by label and lost"
+    assert found[0]["flows"] == 50
+
+
+def test_a_continuing_attack_extends_one_incident(client, alpha):
+    """Four windows of the same attack is one row an analyst works, not four."""
+    org = alpha["org_id"]
+    base = SLOW_NOW + timedelta(hours=8)
+    src = "45.33.32.101"
+    for step in range(4):
+        end = base + WINDOW * step
+        _slow_flows(org, 45, end - timedelta(minutes=1), tag=f"cont{step}",
+                    src_ip=src, dst_ip="10.20.5.5")
+        _detect(org, end)
+
+    rows = [r for r in _incidents(org) if r.src_ip == src]
+    assert len(rows) == 1, "each window opened its own incident"
+    # Held-open connections, not connections seen. A steady forty-five-socket
+    # attack that summed across windows would read as 180 and look like it was
+    # escalating when nothing had changed.
+    assert rows[0].flow_count == 45
+    assert rows[0].last_seen_at > rows[0].opened_at
+
+
+def test_severity_follows_how_many_sockets_are_held(client, alpha):
+    """The resource being consumed is the connection table, so count is the axis."""
+    assert bl.slow_dos_severity(bl.SLOW_DOS_MIN_FLOWS) == "medium"
+    assert bl.slow_dos_severity(bl.SLOW_DOS_HIGH_FLOWS) == "high"
+    assert bl.slow_dos_severity(bl.SLOW_DOS_CRITICAL_FLOWS) == "critical"
+
+    org = alpha["org_id"]
+    end = SLOW_NOW + timedelta(hours=9)
+    src = "45.33.32.150"
+    _slow_flows(org, 40, end - timedelta(minutes=1), tag="sev1",
+                src_ip=src, dst_ip="10.20.6.6")
+    _detect(org, end)
+    row = [r for r in _incidents(org) if r.src_ip == src][0]
+    assert row.severity == "medium"
+
+    end2 = end + WINDOW
+    _slow_flows(org, 450, end2 - timedelta(minutes=1), tag="sev2",
+                src_ip=src, dst_ip="10.20.6.6")
+    _detect(org, end2)
+    row = [r for r in _incidents(org) if r.src_ip == src][0]
+    assert row.severity == "critical", "a worsening attack kept its old severity"
+
+
+def test_one_source_starving_two_services_is_one_campaign(client, alpha):
+    """Same attacker, same fix at the edge — one row, and it names both."""
+    org = alpha["org_id"]
+    end = SLOW_NOW + timedelta(hours=10)
+    src = "45.33.32.180"
+    _slow_flows(org, 35, end - timedelta(minutes=1), tag="two-a",
+                src_ip=src, dst_ip="10.20.7.7", dst_port=443)
+    _slow_flows(org, 90, end - timedelta(minutes=1), tag="two-b",
+                src_ip=src, dst_ip="10.20.7.8", dst_port=80)
+
+    found = _detect(org, end)
+    assert len(found) == 2, "the two targets were not scored separately"
+
+    rows = [r for r in _incidents(org) if r.src_ip == src]
+    assert len(rows) == 1
+    assert rows[0].flow_count == 125
+    # Named after the target in the most trouble, not whichever sorted first.
+    assert "10.20.7.8:80" in rows[0].detail
+    assert "2 services" in rows[0].detail
+
+
+def test_slow_dos_runs_as_part_of_a_normal_window(client, beta):
+    """It has to be reachable from the loop that actually runs in production."""
+    org = beta["org_id"]
+    end = SLOW_NOW + timedelta(hours=11)
+    src = "45.33.32.190"
+    _slow_flows(org, 60, end - timedelta(minutes=1), tag="wired",
+                src_ip=src, dst_ip="10.20.8.8")
+
+    db = SessionLocal()
+    try:
+        bl.evaluate_window(db, org, end, WINDOW)
+    finally:
+        db.close()
+
+    assert [r for r in _incidents(org) if r.src_ip == src], \
+        "evaluate_window did not run the slow-DoS rule"
+
+
+def test_a_malformed_source_address_is_not_treated_as_hostile(client, beta):
+    """An exporter sending garbage must not manufacture an attacker."""
+    assert bl._is_external("45.33.32.156") is True
+    assert bl._is_external("10.0.0.4") is False
+    assert bl._is_external("") is False
+    assert bl._is_external("not-an-address") is False
+
+
+def test_slow_dos_incidents_stay_inside_one_org(client, alpha, beta):
+    """A detector that runs per-org must not leak one tenant's attackers.
+
+    Checked through the API rather than the model, because the query the
+    dashboard actually issues is the one that could get the scoping wrong.
+    """
+    beta_sources = {r.src_ip for r in _incidents(beta["org_id"])}
+    assert beta_sources, "expected beta to have its own detections by now"
+
+    seen = client.get("/api/incidents?status=all", cookies=alpha["cookies"]).json()
+    alpha_sources = {r["src_ip"] for r in seen if r["label"] == bl.SLOW_DOS_LABEL}
+    assert alpha_sources
+    assert alpha_sources.isdisjoint(beta_sources)
+
+
+def test_a_slow_dos_incident_reaches_the_incidents_api(client, alpha):
+    rows = client.get("/api/incidents?status=all", cookies=alpha["cookies"]).json()
+    slow = [r for r in rows if r["label"] == bl.SLOW_DOS_LABEL]
+    assert slow, "the detection never became something an analyst can see"
+    assert slow[0]["detail"], "the API dropped the evidence"
+    assert slow[0]["peak_confidence"] == 0.0
 
 
 # ── API ───────────────────────────────────────────────────────────────────

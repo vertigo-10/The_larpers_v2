@@ -94,6 +94,36 @@ class Settings(BaseSettings):
     #   https://www.kaggle.com/datasets/cicdataset/cicids2017
     cicids_data_dir: Optional[str] = None
 
+    # ── NetFlow / IPFIX collector ─────────────────────────────────────────
+    # Off by default. It binds UDP ports, and a library that opens a listening
+    # socket the moment it is imported is a bad neighbour — the test suite, a
+    # CLI invocation and a second worker process would all fight over the bind.
+    # Enabling it is a deployment decision.
+    netflow_enabled: bool = False
+    # 2055 is the de-facto NetFlow v5/v9 port, 4739 the IANA-assigned IPFIX
+    # port. Both are listed because devices differ on which they use and the
+    # parser auto-detects the version from the header anyway, so there is no
+    # cost to listening on both.
+    netflow_ports: str = "2055,4739"
+    netflow_bind_host: str = "0.0.0.0"
+    # How often buffered flows are drained into the scoring pipeline. Flow
+    # records are already an aggregate the exporter emitted seconds to minutes
+    # after the traffic happened, so sub-second flushing buys no freshness and
+    # costs a database round trip per packet.
+    netflow_flush_interval_s: float = 2.0
+    # Per-org ceiling on flows held between flushes. Beyond this, new records
+    # are dropped and counted. An unauthenticated UDP port cannot be allowed to
+    # grow a Python list without bound — that is a one-packet-per-byte path to
+    # an OOM kill, and the collector dying takes the dashboard with it.
+    netflow_max_buffered_flows: int = 20000
+    # Per-source datagram ceiling per flush window, applied before parsing.
+    # Cheapest possible defence against a flood: a spoofed source cannot make
+    # us spend CPU decoding more than this many packets per window.
+    netflow_max_packets_per_source: int = 2000
+    # How many distinct unregistered source addresses to remember. Bounded
+    # because the set is keyed by a spoofable field.
+    netflow_max_unclaimed: int = 200
+
     # ── model artifacts ───────────────────────────────────────────────────
     # Anchored to the package, not the working directory. A relative default
     # meant the model only loaded if you happened to launch from backend/, and
@@ -103,6 +133,21 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env.lower() in ("production", "prod")
+
+    @property
+    def netflow_port_list(self) -> List[int]:
+        ports: List[int] = []
+        for chunk in self.netflow_ports.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                port = int(chunk)
+            except ValueError:
+                continue
+            if 1 <= port <= 65535:
+                ports.append(port)
+        return ports
 
     @property
     def cors_origin_list(self) -> List[str]:

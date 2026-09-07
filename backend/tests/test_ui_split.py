@@ -32,7 +32,12 @@ COMPANY_PAGES = [
 ]
 # Deliberately unscoped: both account types have a profile, a settings page and
 # people to manage. They reword themselves per org_type instead of splitting.
-SHARED_PAGES = ["profile.html", "team.html", "settings.html"]
+# exporters.html joins them because a home router exports NetFlow exactly like a
+# datacentre firewall does — the API gates it on role, not on org type, so a
+# scope here would lock households out of registering their own router.
+SHARED_PAGES = [
+    "profile.html", "team.html", "settings.html", "exporters.html",
+]
 # Pre-auth. There is no session to compare a scope against yet.
 AUTH_PAGES = ["login.html", "signup.html", "join.html"]
 

@@ -9,7 +9,10 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response,
+    status,
+)
 from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.orm import Session
 
@@ -18,7 +21,8 @@ from .. import baseline as bl
 from ..config import settings
 from ..db import get_db
 from ..engine import (
-    BENIGN, manager, process_flows, record_metric_point, severity_for,
+    BENIGN, manager, process_flows, push_scored_batch, record_metric_point,
+    severity_for,
 )
 from ..features import has_feature
 from ..ml.infer import get_detector
@@ -43,6 +47,8 @@ from ..schemas import (
     IncidentActionIn,
     IncidentOut,
     MitigateIn,
+    NodeOut,
+    NodePatch,
     PortRowOut,
     ProtocolRowOut,
     SeriesOut,
@@ -59,6 +65,7 @@ from ..security import (
     IngestCaller,
     current_user,
     ingest_caller,
+    optional_current_user,
     require_admin,
     require_operator,
 )
@@ -118,21 +125,50 @@ def status_endpoint(user: User = Depends(current_user)):
 
 
 @router.get("/health")
-def health(db: Session = Depends(get_db)):
-    """Unauthenticated liveness probe for the platform's health checker."""
+def health(
+    response: Response,
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(optional_current_user),
+):
+    """Health probe. Public, but only as detailed as the caller is entitled to.
+
+    Anonymous callers get a bare ok/degraded verdict, because that is all a
+    load balancer needs and anything more is free reconnaissance: the exact
+    version tells a stranger which published CVEs to try, and knowing the
+    database is unreachable tells them when the service is least able to cope.
+    Signed-in operators get the breakdown, which is what the settings page
+    renders.
+
+    The status code carries the verdict as well as the body, because probes
+    check it and nothing else — `curl -fsS` in the container HEALTHCHECK reads
+    the code and discards the JSON. It used to be 200 unconditionally, which
+    meant a process that could not reach its database still reported itself
+    healthy for as long as it stayed up.
+
+    A missing model is deliberately *not* a 503. The app genuinely still works
+    without one — sign-in, dashboards, team management and history all serve,
+    and the detection endpoints already report their own unavailability. A
+    restart cannot conjure an artifact that failed to load, so failing the
+    probe would turn a degraded deployment into a restart loop.
+    """
     try:
         db.execute(select(1))
         db_ok = True
     except Exception:  # noqa: BLE001
         db_ok = False
+
     d = get_detector()
-    ok = db_ok and d.ready
-    return {
-        "status": "ok" if ok else "degraded",
-        "database": db_ok,
-        "model": d.ready,
-        "version": __version__,
-    }
+    if not db_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    body = {"status": "ok" if (db_ok and d.ready) else "degraded"}
+    if user is not None:
+        body.update({
+            "database": db_ok,
+            "model": d.ready,
+            "version": __version__,
+        })
+    return body
 
 
 # ── summary + metrics ─────────────────────────────────────────────────────
@@ -290,6 +326,7 @@ def list_flows(
 @router.post("/ingest")
 def ingest(
     body: FlowBatchIn,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     caller: IngestCaller = Depends(ingest_caller),
 ):
@@ -321,6 +358,15 @@ def ingest(
     # own commit.
     point = record_metric_point(db, caller.org_id, scored)
     db.commit()
+
+    # Scored and persisted is not the same as seen. Without this, traffic
+    # submitted by a collector agent landed in the database and the incident
+    # table but never reached an open dashboard, so the live view stayed empty
+    # until someone reloaded the page. A background task rather than an inline
+    # await because this route is sync — the broadcast needs the event loop,
+    # and the caller should not wait on socket writes to other people's
+    # browsers to get its acknowledgement.
+    background.add_task(push_scored_batch, caller.org_id, scored, point)
 
     return {
         "ok": True,
@@ -668,7 +714,7 @@ def baseline_profile(
     )
 
 
-@router.get("/nodes")
+@router.get("/nodes", response_model=List[NodeOut])
 def nodes(db: Session = Depends(get_db), user: User = Depends(current_user)):
     since = datetime.now(timezone.utc) - timedelta(minutes=5)
     traffic = dict(db.execute(
@@ -685,15 +731,116 @@ def nodes(db: Session = Depends(get_db), user: User = Depends(current_user)):
         select(Node).where(Node.org_id == user.org_id).order_by(Node.label)
     ).scalars().all()
     return [
-        {
-            "label": n.label,
-            "desc": n.description,
-            "mbps": round(float(traffic.get(n.label, 0)) * 8 / 1e6, 2),
-            "attacks": int(attacks.get(n.label, 0)),
-            "status": "warn" if attacks.get(n.label, 0) > 8 else n.status,
-        }
+        NodeOut(
+            id=n.id,
+            label=n.label,
+            desc=n.description,
+            mbps=round(float(traffic.get(n.label, 0)) * 8 / 1e6, 2),
+            attacks=int(attacks.get(n.label, 0)),
+            status="warn" if attacks.get(n.label, 0) > 8 else n.status,
+        )
         for n in rows
     ]
+
+
+@router.patch("/nodes/{node_id}", response_model=NodeOut)
+def update_node(
+    node_id: int,
+    body: NodePatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_operator),
+):
+    """Rename a node or reword its description.
+
+    `Flow.node` and `Incident.node` store the label as a string rather than a
+    foreign key, so a rename has to carry the history with it. Leaving the old
+    rows behind would strand every past flow under a name no node has: the
+    renamed node would read as newly installed and silent, and the traffic it
+    actually carried would belong to nothing. The device is the same device —
+    only what we call it changed.
+    """
+    row = db.get(Node, node_id)
+    # 404 rather than 403 for another org's node: a 403 would confirm the row
+    # exists, which is one bit more than a stranger should learn.
+    if row is None or row.org_id != user.org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Node not found.")
+
+    changed = []
+    if body.description is not None:
+        row.description = body.description.strip()
+        changed.append("description")
+
+    new_label = body.label.strip() if body.label is not None else None
+    if new_label and new_label != row.label:
+        clash = db.scalar(
+            select(Node.id).where(
+                Node.org_id == user.org_id, Node.label == new_label
+            )
+        )
+        if clash is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"This network already has a node called {new_label}.",
+            )
+
+        old_label = row.label
+        row.label = new_label
+        db.execute(
+            update(Flow).where(Flow.org_id == user.org_id, Flow.node == old_label)
+            .values(node=new_label)
+        )
+        db.execute(
+            update(Incident).where(
+                Incident.org_id == user.org_id, Incident.node == old_label
+            ).values(node=new_label)
+        )
+        changed.append(f"renamed from {old_label}")
+
+    if changed:
+        db.add(AuditLog(
+            org_id=user.org_id, user_id=user.id, user_label=user.name,
+            action="node.updated", detail=f"{row.label}: {', '.join(changed)}",
+        ))
+    db.commit()
+    db.refresh(row)
+    return NodeOut(
+        id=row.id, label=row.label, desc=row.description,
+        mbps=0.0, attacks=0, status=row.status,
+    )
+
+
+@router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_node(
+    node_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Remove a node from the monitored inventory.
+
+    Admin-only, unlike renaming: this removes something from the list of things
+    being watched, and a gap in coverage is not a cosmetic change.
+
+    Its flows and incidents are deliberately kept. They are evidence of what
+    happened on the network, and removing a device from an inventory is not a
+    claim that the traffic it carried never occurred.
+
+    A node that is still sending will be registered again automatically within
+    a tick or two, because `process_flows` creates nodes it has not seen. That
+    is intended: for a network monitor, a device that is still talking still
+    exists, and silently hiding live traffic would be the worse failure.
+    """
+    row = db.get(Node, node_id)
+    if row is None or row.org_id != user.org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Node not found.")
+
+    label = row.label
+    db.delete(row)
+    db.add(AuditLog(
+        org_id=user.org_id, user_id=user.id, user_label=user.name,
+        action="node.deleted", detail=label,
+    ))
+    db.commit()
+    return None
 
 
 # ── incidents ─────────────────────────────────────────────────────────────
@@ -716,7 +863,7 @@ def list_incidents(
             resolved_at=_ms(r.resolved_at) if r.resolved_at else None,
             flow_count=r.flow_count, peak_confidence=round(r.peak_confidence, 4),
             peak_bps=round(r.peak_bps, 1), severity=r.severity, status=r.status,
-            mitigated=r.mitigated,
+            mitigated=r.mitigated, detail=r.detail,
             mitigation_tier=r.mitigation_tier,
             rate_limit_rps=r.rate_limit_rps,
             mitigation_expires_at=_ms(r.mitigation_expires_at)
@@ -807,7 +954,7 @@ def incident_action(
         resolved_at=_ms(inc.resolved_at) if inc.resolved_at else None,
         flow_count=inc.flow_count, peak_confidence=round(inc.peak_confidence, 4),
         peak_bps=round(inc.peak_bps, 1), severity=inc.severity, status=inc.status,
-        mitigated=inc.mitigated,
+        mitigated=inc.mitigated, detail=inc.detail,
         mitigation_tier=inc.mitigation_tier,
         rate_limit_rps=inc.rate_limit_rps,
         mitigation_expires_at=_ms(inc.mitigation_expires_at)

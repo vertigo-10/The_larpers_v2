@@ -81,6 +81,18 @@ _ADDITIVE_COLUMNS = [
     ("incidents", "mitigation_tier", "VARCHAR(20)"),
     ("incidents", "rate_limit_rps", "INTEGER"),
     ("incidents", "mitigation_expires_at", "TIMESTAMP"),
+    # Empty means "this flow never told us its destination", which is the true
+    # state of every row written before the column existed. The aggregate
+    # detectors treat blank as unknown and skip it — if it defaulted to
+    # something like '0.0.0.0' instead, every historical flow would appear to
+    # share one target and the slow-DoS grouping would read the whole archive
+    # as a single enormous attack on a host that does not exist.
+    ("flows", "dst_ip", "VARCHAR(45) NOT NULL DEFAULT ''"),
+    # Nullable and undefaulted on purpose. Every incident that already exists
+    # was opened by the classifier, where the label is the whole finding, so
+    # there is genuinely nothing to say — and backfilling a sentence would put
+    # words in the record's mouth for incidents nobody has re-examined.
+    ("incidents", "detail", "VARCHAR(200)"),
 ]
 
 

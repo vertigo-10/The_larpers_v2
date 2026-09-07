@@ -181,6 +181,12 @@ class FlowIn(BaseModel):
     """A flow submitted by a real collector to POST /api/ingest."""
 
     src_ip: str = Field(max_length=45)
+    # Optional, and stays optional. Plenty of collectors either do not export a
+    # destination address or are aimed at a single host and see no reason to
+    # repeat it. Rejecting their flows over a field the classifier does not even
+    # look at would break working integrations to serve a detector that simply
+    # abstains without it.
+    dst_ip: str = Field(default="", max_length=45)
     dst_port: int = Field(ge=0, le=65535)
     protocol: str = Field(default="TCP", max_length=10)
     node: str = Field(default="unknown", max_length=60)
@@ -211,6 +217,21 @@ class FlowOut(BaseModel):
     source: str
 
 
+# ── nodes ─────────────────────────────────────────────────────────────────
+class NodePatch(BaseModel):
+    label: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    description: Optional[str] = Field(default=None, max_length=200)
+
+
+class NodeOut(BaseModel):
+    id: int
+    label: str
+    desc: str
+    mbps: float
+    attacks: int
+    status: str
+
+
 # ── incidents ─────────────────────────────────────────────────────────────
 class IncidentOut(BaseModel):
     id: int
@@ -226,6 +247,11 @@ class IncidentOut(BaseModel):
     severity: str
     status: str
     mitigated: bool
+    # One line of evidence from whichever detector opened the incident, or null
+    # when the label already says everything there is to say. Null on every
+    # incident the classifier raised, which is most of them — the UI renders the
+    # line only when it exists rather than reserving space for a blank.
+    detail: Optional[str] = None
     # Which escalation step was recorded, if any. `mitigation_expires_at` is
     # null both when there is no ban and when the ban is permanent, so the two
     # fields have to be read together — see MITIGATION_TIERS.
@@ -548,3 +574,75 @@ class SummaryOut(BaseModel):
 class ModelMetricsOut(BaseModel):
     ready: bool
     metrics: Dict
+
+
+# ── flow exporters ────────────────────────────────────────────────────────
+class ExporterIn(BaseModel):
+    """Registering a device that will send NetFlow/IPFIX to the collector."""
+
+    source_ip: str = Field(max_length=45)
+    name: str = Field(default="", max_length=120)
+    node_label: str = Field(default="", max_length=60)
+    # A device that samples 1-in-N reports counters N times smaller than the
+    # traffic it saw. Left at 1 the model would read a flood as a trickle, so
+    # this is worth prompting for even though most operators will not know it
+    # offhand — 1 is also the correct answer for most small deployments.
+    sampling_rate: int = Field(default=1, ge=1, le=1_000_000)
+    enabled: bool = True
+
+    @field_validator("source_ip")
+    @classmethod
+    def _valid_ip(cls, v: str) -> str:
+        import ipaddress
+
+        v = v.strip()
+        try:
+            # Rejects hostnames deliberately. The collector matches on the
+            # literal source address of a UDP packet; a name would have to be
+            # resolved on every datagram, and DNS is neither fast enough for
+            # that path nor trustworthy enough to decide tenancy.
+            ipaddress.ip_address(v)
+        except ValueError:
+            raise ValueError("Must be an IP address, not a hostname.")
+        return v
+
+
+class ExporterPatch(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=120)
+    node_label: Optional[str] = Field(default=None, max_length=60)
+    sampling_rate: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    enabled: Optional[bool] = None
+
+
+class ExporterOut(BaseModel):
+    id: int
+    source_ip: str
+    name: str
+    node_label: str
+    version: str
+    sampling_rate: int
+    enabled: bool
+    last_seen_at: Optional[datetime]
+    packets_received: int
+    flows_received: int
+    last_error: str
+    # Derived, not stored: "waiting" until the first packet, "live" while
+    # packets are arriving, "silent" once one has not arrived in a while. An
+    # operator cares about this far more than the raw timestamp.
+    state: str
+
+
+class UnclaimedExporterOut(BaseModel):
+    source_ip: str
+    version: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    packets_received: int
+
+
+class CollectorStatusOut(BaseModel):
+    enabled: bool
+    listening: bool
+    ports: List[int]
+    exporters: int
+    stats: Dict

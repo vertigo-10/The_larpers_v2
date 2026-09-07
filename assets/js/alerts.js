@@ -90,8 +90,11 @@
 
     if (state.query) {
       const q = state.query.toLowerCase();
+      // `detail` is searched too, which is how an operator finds every incident
+      // aimed at one victim — the target address only appears there.
       rows = rows.filter((i) =>
-        `${i.src_ip} ${i.node} ${i.label} ${i.severity}`.toLowerCase().indexOf(q) !== -1);
+        `${i.src_ip} ${i.node} ${i.label} ${i.severity} ${i.detail || ""}`
+          .toLowerCase().indexOf(q) !== -1);
     }
 
     // Worst first, then most recent — an operator reads top-down.
@@ -120,11 +123,16 @@
               <span style="color:${sev.color};font-weight:700;font-size:11px">${esc(sev.label.toUpperCase())}</span>
             </div>
           </td>
-          <td class="mono">${esc(i.src_ip)}</td>
+          <td class="mono">${esc(i.src_ip)}
+            ${i.detail ? `<div class="cell-sub">${esc(i.detail)}</div>` : ""}</td>
           <td><span class="tag" style="background:${cls.color}1f;color:${cls.color}">${esc(cls.short)}</span></td>
           <td>${esc(i.node)}</td>
           <td class="mono">${esc(fmt.num(i.flow_count))}</td>
-          <td class="mono">${Math.round(i.peak_confidence * 100)}%</td>
+          <td class="mono">${
+            // A rule-based detection has no confidence, and printing "0%" for
+            // one would read as a detector that was certain it was wrong.
+            cls.scored === false ? `<span class="dim" title="Not a model prediction — no confidence to report">—</span>`
+                                 : `${Math.round(i.peak_confidence * 100)}%`}</td>
           <td class="mono">${esc(fmt.bytes(i.peak_bps))}</td>
           <td title="${esc(fmt.datetime(i.opened_at))}">${esc(fmt.ago(i.opened_at))}</td>
           <td title="${esc(fmt.datetime(i.last_seen_at))}">${esc(fmt.ago(i.last_seen_at))}</td>
@@ -261,9 +269,13 @@
     const sev = severityMeta(inc.severity);
     // Every field here came with the incident. Nothing is fetched on open, so
     // the modal cannot show a spinner or fail halfway.
-    el("ban-summary").textContent =
-      `${cls.label} · ${fmt.num(inc.flow_count)} flow${inc.flow_count === 1 ? "" : "s"}`
-      + ` · peak ${fmt.bytes(inc.peak_bps)} · seen on ${inc.node}`;
+    // The evidence line when there is one, because for a rule-based detection
+    // the counts below are the whole case and "peak 40 B/s" on its own reads
+    // like there is nothing here worth banning over.
+    el("ban-summary").textContent = inc.detail
+      ? `${cls.label} · ${inc.detail} Seen on ${inc.node}.`
+      : `${cls.label} · ${fmt.num(inc.flow_count)} flow${inc.flow_count === 1 ? "" : "s"}`
+        + ` · peak ${fmt.bytes(inc.peak_bps)} · seen on ${inc.node}`;
     el("ban-sev-chip").innerHTML =
       `<span class="chip" style="color:${sev.color};border-color:${sev.color}55">${
         esc(sev.label.toUpperCase())}</span>`;

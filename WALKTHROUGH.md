@@ -35,7 +35,7 @@ the vocabulary and the amount of detail change.
 > **ORM (Object-Relational Mapper)** — lets you write `db.get(User, 3)` instead
 > of SQL. The Python class *is* the table definition.
 
-There is no framework on the front end and no bundler. Every page is a plain
+There is no framework  on the front end and no bundler. Every page is a plain
 `.html` file loading plain `.js`. That is a deliberate constraint: the whole
 client is readable without tooling.
 
@@ -60,7 +60,7 @@ onto some stage of it.
         │
         ▼
   ④ signed_log1p → StandardScaler → MLP → softmax          backend/app/ml/infer.py
-        │
+         │
         ▼
   ⑤ threshold + severity          backend/app/severity.py
         │

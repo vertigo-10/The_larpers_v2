@@ -45,7 +45,8 @@
     camera: `<path d="M4 8h3l2-2h6l2 2h3v12H4z" ${S}/><circle cx="12" cy="13" r="3.2" ${S}/>`,
     logout: `<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" ${S}/><path d="M10 8 6 12l4 4M6 12h11" ${S}/>`,
     file: `<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" ${S}/><path d="M14 3v5h5M9 13h6M9 17h4" ${S}/>`,
-    key: `<circle cx="8" cy="14" r="4" ${S}/><path d="m11 11 9-9 2 2-2 2 2 2-3 3-2-2-2 2" ${S}/>`
+    key: `<circle cx="8" cy="14" r="4" ${S}/><path d="m11 11 9-9 2 2-2 2 2 2-3 3-2-2-2 2" ${S}/>`,
+    feed: `<path d="M5 19h.01" ${S}/><path d="M4 12a8 8 0 0 1 8 8" ${S}/><path d="M4 5a15 15 0 0 1 15 15" ${S}/>`
   };
 
   function icon(name, size) {
@@ -88,7 +89,13 @@
         { label: "Network Nodes", href: "nodes.html", key: "nodes",
           icon: "router", only: "company" },
         { label: "My Devices", href: "home-devices.html", key: "nodes",
-          icon: "router", only: "consumer" }
+          icon: "router", only: "consumer" },
+        // One page, two entries, because the words differ more than the screen
+        // does — same split as Nodes/My Devices above.
+        { label: "Flow Sources", href: "exporters.html", key: "exporters",
+          icon: "feed", only: "company" },
+        { label: "Router Setup", href: "exporters.html", key: "exporters",
+          icon: "feed", only: "consumer" }
       ]
     },
     {
@@ -173,7 +180,14 @@
         "these keys instead of an account, so it never holds a person's " +
         "password and can be revoked on its own.",
       keysPrompt: "Name this key — something identifying the machine it will " +
-        "run on:"
+        "run on:",
+      exportersTitle: "Flow Sources",
+      exportersCrumb: "netflow / ipfix",
+      exportersNotice: "A flow source is a router, firewall or switch that " +
+        "exports NetFlow or IPFIX to SENTRY. The protocol carries no " +
+        "credential, so a device is only trusted once you register its source " +
+        "address here — traffic from anything else is counted and discarded.",
+      exportersAddBtn: "Register a device"
     },
     consumer: {
       teamNav: "Household",
@@ -208,7 +222,16 @@
         "password: anyone holding it can send traffic to your dashboard. " +
         "Disconnect it here at any time and it stops working immediately.",
       keysPrompt: "What should we call this device? Something you'll " +
-        "recognise, like \"living room laptop\":"
+        "recognise, like \"living room laptop\":",
+      exportersTitle: "Router Setup",
+      exportersCrumb: "where your traffic comes from",
+      exportersNotice: "Most home routers can send SENTRY a summary of the " +
+        "traffic passing through them, without you installing anything. Add " +
+        "your router's address here first, then paste the setup lines below " +
+        "into it. Until its address is registered, anything it sends is " +
+        "ignored — that is what stops a neighbour's router reporting into " +
+        "your dashboard.",
+      exportersAddBtn: "Add your router"
     }
   };
 
@@ -533,14 +556,22 @@
     }
   };
 
-  /** Presentation metadata for a predicted class, tolerant of unknown labels. */
+  /**
+   * Presentation metadata for an incident label, tolerant of unknown ones.
+   *
+   * Two maps, checked in order, because not every incident comes from the
+   * model: SENTRY_CLASSES is the three labels the network predicts, and
+   * SENTRY_DETECTIONS is the rule-based findings that have no confidence to
+   * report. `scored` defaults true so the model's classes need not declare it.
+   */
   function classMeta(label) {
-    return (
-      window.SENTRY_CLASSES[label] || {
-        label: label, short: String(label || "?").toUpperCase(),
-        color: "#6d7d85", tag: "warn", benign: false
-      }
-    );
+    const meta = window.SENTRY_CLASSES[label]
+      || (window.SENTRY_DETECTIONS || {})[label];
+    if (meta) return Object.assign({ scored: true }, meta);
+    return {
+      label: label, short: String(label || "?").toUpperCase(),
+      color: "#6d7d85", tag: "warn", benign: false, scored: true
+    };
   }
 
   function severityMeta(sev) {
@@ -582,6 +613,17 @@
       what: "Something was probing your network",
       sub: "A device went door-to-door looking for open ports. On its own it " +
            "is not damage, but it is usually what comes first."
+    },
+    // Not one of the model's classes — see SENTRY_DETECTIONS in config.js. It
+    // is here because these three screens describe incidents, not predictions,
+    // and a household seeing "SLOW-DOS" with the generic fallback line
+    // underneath would learn nothing from it.
+    slow_dos: {
+      what: "Something is tying up one of your devices",
+      sub: "A single address opened a lot of connections and then left them " +
+           "sitting there doing nothing. It uses hardly any traffic, which is " +
+           "the point — it quietly fills up the device until real visitors " +
+           "cannot get in."
     }
   };
 
@@ -590,6 +632,33 @@
       what: "Unusual activity",
       sub: "This did not match how your network normally behaves."
     };
+  }
+
+  /**
+   * The "where did this come from" lines inside a technical detail panel.
+   *
+   * Shared by both consumer screens that show one, so the same incident cannot
+   * be described two ways depending on which page it is read from.
+   *
+   * It has to branch. Not every incident is a model prediction: an aggregate
+   * rule has no confidence, and rendering its zero as "0.0% confidence" would
+   * tell the reader the system was completely unsure — of a finding it is in
+   * fact reporting because it is certain. Saying which of the two produced the
+   * incident is also just honest about how the product works.
+   *
+   * Returns HTML, so every interpolated value is escaped here.
+   */
+  function verdictLine(incident) {
+    const cls = classMeta(incident.label);
+    const evidence = incident.detail
+      ? `<br /><b>What was seen</b> ${esc(incident.detail)}`
+      : "";
+    if (cls.scored === false) {
+      return `<b>Detected by</b> a traffic rule rather than the model — ` +
+             `each connection on its own looked ordinary${evidence}`;
+    }
+    const pct = (Number(incident.peak_confidence) * 100).toFixed(1);
+    return `<b>Model verdict</b> ${esc(cls.label)} at ${esc(pct)}% confidence${evidence}`;
   }
 
   /**
@@ -724,6 +793,6 @@
     icon, esc, mountSidebar, setStreamState, toast, fmt,
     classMeta, severityMeta, fatalBanner, clearFatal, ICONS,
     orgCopy, applyOrgProfile, applyFeatureGates, landingFor,
-    plainClass, isHandled, isSerious, renderVerdict, blockSource
+    plainClass, verdictLine, isHandled, isSerious, renderVerdict, blockSource
   };
 })();

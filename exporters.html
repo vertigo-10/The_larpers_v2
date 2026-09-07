@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flow Sources — SENTRY NN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/styles.css?v=20260836" />
+<link rel="stylesheet" href="assets/css/intro.css?v=20260836" />
+</head>
+<!-- Deliberately unscoped. A household router speaks NetFlow just as well as a
+     datacentre firewall, and the API gates this on role rather than org type. -->
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1 id="page-title">Flow Sources</h1>
+      <span class="crumb" id="crumb">/ netflow / ipfix</span>
+      <div class="topbar-right">
+        <button class="pill" id="btn-refresh"></button>
+        <button class="btn btn-primary" id="btn-add"></button>
+        <a href="profile.html" class="avatar" id="topbar-avatar">··</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="notice">
+        <span id="ico-notice"></span>
+        <span id="notice-text"></span>
+      </div>
+
+      <!-- Collector health. Above the device list because "is the listener even
+           up" has to be answerable before "why is this device silent".
+           Six columns rather than the default five: the two drop counters are
+           never added together, so they need a column each. -->
+      <div class="stat-strip" id="collector-strip"
+           style="grid-template-columns:repeat(6,1fr)"></div>
+
+      <section class="panel" style="margin-bottom:14px">
+        <div class="section-note" id="collector-note"></div>
+      </section>
+
+      <!-- Senders we have heard from that nobody has claimed. Hidden unless the
+           server returns something: the list is adjacency-filtered, so for most
+           orgs it is empty and an empty panel would only read as a fault. -->
+      <section class="panel" id="unclaimed-panel" style="margin-bottom:14px" hidden>
+        <div class="panel-head">
+          <span class="panel-title">Unclaimed senders on your network</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="unclaimed-pill">—</span></div>
+        </div>
+        <div class="table-scroll" style="max-height:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Source address</th>
+                <th>Protocol</th>
+                <th>First heard</th>
+                <th>Last heard</th>
+                <th>Packets</th>
+                <th style="text-align:right">Claim</th>
+              </tr>
+            </thead>
+            <tbody id="unclaimed-body"></tbody>
+          </table>
+        </div>
+        <div class="section-note">
+          These are devices sending flow records that no organisation has
+          registered. You are shown one only when you are browsing from the same
+          address it exports from, or when it sits next to a device you already
+          registered — otherwise it stays invisible, because a full list would
+          let anyone claim someone else's firewall.
+        </div>
+      </section>
+
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-head">
+          <span class="panel-title">Registered devices</span>
+          <div class="right"><span class="pill" style="height:24px;font-size:10.5px" id="count-pill">—</span></div>
+        </div>
+        <div class="table-scroll" style="max-height:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Source address</th>
+                <th>Attributed to node</th>
+                <th>Protocol</th>
+                <th>Sampling</th>
+                <th>State</th>
+                <th>Last packet</th>
+                <th>Flows</th>
+                <th style="text-align:right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="exporter-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Set up a device</span>
+          <div class="right">
+            <select id="vendor" class="sel-input" style="min-width:0;height:28px;font-size:11px"></select>
+            <button class="pill" id="btn-copy" style="height:26px;font-size:10.5px"></button>
+          </div>
+        </div>
+        <div class="section-note" style="padding-bottom:0">
+          <div class="field" style="max-width:320px;margin-bottom:10px">
+            <label for="collector-host">Address your device should send to</label>
+            <input type="text" id="collector-host" class="mono" autocomplete="off" />
+            <span class="hint">
+              Pre-filled from the address you are reading this page on. If SENTRY
+              sits behind a proxy or a CDN, flow records do not follow that path
+              — put the collector's own reachable address here instead.
+            </span>
+          </div>
+        </div>
+        <div class="snippet" id="snippet"></div>
+        <div class="section-note" id="vendor-note"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- register / edit a device -->
+<div class="modal-back" id="edit-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="ico-edit"></span>
+      <span class="t" id="edit-title">Register a device</span>
+      <button class="x" id="edit-close"></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-error" id="edit-err"></div>
+      <div class="field">
+        <label for="e-ip">Source address</label>
+        <input type="text" id="e-ip" class="mono" maxlength="45" placeholder="203.0.113.7" autocomplete="off" />
+        <span class="hint">
+          The IP address the device's flow packets arrive from, which is not
+          always the address you manage it on. A name will not work here: the
+          collector matches the literal source address on every datagram.
+        </span>
+      </div>
+      <div class="field">
+        <label for="e-name">Name</label>
+        <input type="text" id="e-name" maxlength="120" placeholder="Edge firewall" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="e-node">Attribute its traffic to</label>
+        <input type="text" id="e-node" maxlength="60" placeholder="EDGE-01" autocomplete="off" />
+        <span class="hint">
+          The node label its flows are filed under, so they line up with the rest
+          of the dashboard. Left blank, the device's name is used.
+        </span>
+      </div>
+      <div class="field">
+        <label for="e-sampling">Sampling rate — 1 in N</label>
+        <input type="number" id="e-sampling" min="1" max="1000000" step="1" value="1" class="mono" />
+        <span class="hint">
+          Leave at 1 unless the device is configured to sample. A device that
+          reports one flow in every thousand describes a flood as a trickle, and
+          the detector believes it.
+        </span>
+      </div>
+      <div class="field">
+        <label for="e-enabled">Accept flows from it</label>
+        <select id="e-enabled" class="sel-input" style="min-width:0">
+          <option value="true" selected>Yes — ingest its traffic</option>
+          <option value="false">No — registered but ignored</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="edit-cancel">Cancel</button>
+      <button class="btn btn-primary" id="edit-save">Register device</button>
+    </div>
+  </div>
+</div>
+
+<!-- confirm removal -->
+<div class="modal-back" id="del-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="ico-del"></span>
+      <span class="t">Remove this device</span>
+      <button class="x" id="del-close"></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-error" id="del-err"></div>
+      <p style="font-size:12px;line-height:1.6;color:var(--text-dim)" id="del-blurb"></p>
+      <div class="field">
+        <label for="d-confirm">Type the source address to confirm</label>
+        <input type="text" id="d-confirm" class="mono" autocomplete="off" />
+        <span class="hint">
+          Flow records already collected are kept. They are evidence of what
+          happened on the network, and removing a device from the inventory is
+          not a claim its traffic never occurred. What stops is future ingest:
+          anything it sends from now on is discarded as unregistered.
+        </span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="del-cancel">Cancel</button>
+      <button class="btn btn-danger" id="del-confirm">Remove device</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/intro.js?v=20260836"></script>
+<script src="assets/js/config.js?v=20260836"></script>
+<script src="assets/js/api.js?v=20260836"></script>
+<script src="assets/js/ui.js?v=20260836"></script>
+<script src="assets/js/exporters.js?v=20260836"></script>
+</body>
+</html>

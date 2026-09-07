@@ -8,6 +8,7 @@ keeps the cookie same-origin, which is the simplest secure configuration.
 
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -19,11 +20,15 @@ from . import __version__
 from .baseline import baseline_loop, stop_baseline
 from .config import settings
 from .db import SessionLocal, init_db
-from .engine import engine_loop, manager, retention_loop, stop_engine
+from .engine import (
+    engine_loop, manager, push_scored_batch, retention_loop, stop_engine,
+)
 from .ml.infer import get_detector
 from .models import User
+from .netflow.collector import FlowCollector, set_collector
 from .routers import api as api_router
 from .routers import auth as auth_router
+from .routers import exporters as exporters_router
 from .routers import team as team_router
 from .security import decode_token, token_is_revoked
 
@@ -57,9 +62,33 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(baseline_loop()),
         asyncio.create_task(retention_loop()),
     ])
+
+    collector = None
+    if settings.netflow_enabled:
+        collector = FlowCollector(on_scored=push_scored_batch)
+        set_collector(collector)
+        try:
+            await collector.start()
+        except Exception as exc:  # noqa: BLE001
+            # A collector that cannot bind is a missing feature, not a broken
+            # app. The dashboard, the API and the simulator all still work, and
+            # /api/exporters/status reports listening=false so the failure is
+            # visible rather than mysterious.
+            print(f"[sentry] WARNING: NetFlow collector failed to start — {exc}")
+        else:
+            if collector.listening:
+                ports = ",".join(str(p) for p in settings.netflow_port_list)
+                print(f"[sentry] NetFlow collector listening on udp/{ports}")
+    else:
+        print("[sentry] NetFlow collector disabled "
+              "(set SENTRY_NETFLOW_ENABLED=true to receive flow exports)")
+
     try:
         yield
     finally:
+        if collector is not None:
+            await collector.stop()
+            set_collector(None)
         stop_engine()
         stop_baseline()
         for task in _background_tasks:
@@ -134,6 +163,7 @@ async def security_headers(request: Request, call_next):
 app.include_router(auth_router.router)
 app.include_router(team_router.router)
 app.include_router(api_router.router)
+app.include_router(exporters_router.router)
 
 
 # ── live stream ───────────────────────────────────────────────────────────

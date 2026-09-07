@@ -5,7 +5,9 @@ deterministic. The tenant-isolation tests matter most: they are the difference
 between a multi-tenant tool and a data breach.
 """
 
+import json
 import os
+import queue
 import tempfile
 
 import pytest
@@ -353,6 +355,114 @@ def test_ingest_does_not_register_the_unknown_placeholder(client, org_a):
 
     listed = client.get("/api/nodes", cookies=org_a["cookies"]).json()
     assert all(n["label"] != "unknown" for n in listed)
+
+
+# ── node management ───────────────────────────────────────────────────────
+def _node_org(client, slug):
+    """A private org so a rename cannot disturb another test's topology."""
+    r = client.post("/api/auth/signup", json={
+        "email": f"{slug}@nodes.example", "password": GOOD_PW,
+        "name": "Node Admin", "org_name": f"Nodes {slug}", "org_type": "company",
+    })
+    assert r.status_code == 201, r.text
+    cookies = dict(client.cookies)
+    client.cookies.clear()
+    return cookies
+
+
+def _node_by_label(client, cookies, label):
+    listed = client.get("/api/nodes", cookies=cookies).json()
+    client.cookies.clear()
+    return next((n for n in listed if n["label"] == label), None)
+
+
+def test_renaming_a_node_carries_its_history(client):
+    """Flow.node is a string, not a foreign key, so a rename must rewrite it.
+
+    Leaving the old rows behind strands every past flow under a name no node
+    has: the renamed node reads as newly installed and silent, and the traffic
+    it actually carried belongs to nothing. It is the same device — only what
+    we call it changed.
+    """
+    cookies = _node_org(client, "rename")
+    r = client.post("/api/ingest", cookies=cookies, json={"flows": [{
+        "src_ip": "10.4.0.1", "dst_port": 443, "protocol": "TCP",
+        "node": "EDGE-01", "duration": 0.4, "packets": 30, "total_bytes": 20000,
+    }]})
+    assert r.status_code == 200, r.text
+    client.cookies.clear()
+
+    node = _node_by_label(client, cookies, "EDGE-01")
+    r = client.patch(f"/api/nodes/{node['id']}", cookies=cookies,
+                     json={"label": "EDGE-CORE"})
+    assert r.status_code == 200, r.text
+    client.cookies.clear()
+
+    flows = client.get("/api/flows", cookies=cookies).json()
+    client.cookies.clear()
+    assert any(f["node"] == "EDGE-CORE" for f in flows)
+    assert not any(f["node"] == "EDGE-01" for f in flows), (
+        "history still points at the old label — the renamed node looks silent"
+    )
+
+
+def test_renaming_onto_an_existing_label_is_refused(client):
+    cookies = _node_org(client, "clash")
+    node = _node_by_label(client, cookies, "EDGE-01")
+    r = client.patch(f"/api/nodes/{node['id']}", cookies=cookies,
+                     json={"label": "DC-LB-01"})
+    assert r.status_code == 409
+    client.cookies.clear()
+
+
+def test_deleting_a_node_keeps_its_flows(client):
+    """Removing a device from an inventory is not a claim its traffic never happened."""
+    cookies = _node_org(client, "delete")
+    r = client.post("/api/ingest", cookies=cookies, json={"flows": [{
+        "src_ip": "10.4.0.2", "dst_port": 443, "protocol": "TCP",
+        "node": "DC-LB-01", "duration": 0.4, "packets": 30, "total_bytes": 20000,
+    }]})
+    assert r.status_code == 200, r.text
+    client.cookies.clear()
+
+    node = _node_by_label(client, cookies, "DC-LB-01")
+    r = client.delete(f"/api/nodes/{node['id']}", cookies=cookies)
+    assert r.status_code == 204
+    client.cookies.clear()
+
+    assert _node_by_label(client, cookies, "DC-LB-01") is None
+    flows = client.get("/api/flows", cookies=cookies).json()
+    client.cookies.clear()
+    assert any(f["node"] == "DC-LB-01" for f in flows)
+
+
+def test_another_org_cannot_rename_or_delete_your_nodes(client, org_b):
+    """404, not 403 — a 403 would confirm the row exists."""
+    cookies = _node_org(client, "victim")
+    node = _node_by_label(client, cookies, "EDGE-01")
+
+    r = client.patch(f"/api/nodes/{node['id']}", cookies=org_b["cookies"],
+                     json={"label": "PWNED"})
+    assert r.status_code == 404
+    client.cookies.clear()
+
+    r = client.delete(f"/api/nodes/{node['id']}", cookies=org_b["cookies"])
+    assert r.status_code == 404
+    client.cookies.clear()
+
+    assert _node_by_label(client, cookies, "EDGE-01") is not None
+
+
+def test_node_rename_is_audited(client):
+    cookies = _node_org(client, "audit")
+    node = _node_by_label(client, cookies, "EDGE-01")
+    assert client.patch(f"/api/nodes/{node['id']}", cookies=cookies,
+                        json={"label": "EDGE-AUDITED"}).status_code == 200
+    client.cookies.clear()
+
+    entries = client.get("/api/team/audit", cookies=cookies).json()
+    client.cookies.clear()
+    assert any(e["action"] == "node.updated" for e in entries)
 
 
 # ── model + detection ─────────────────────────────────────────────────────
@@ -865,6 +975,88 @@ def test_websocket_accepts_a_live_session(client, make_user):
         assert ws is not None
 
 
+def _ws_recv_json(ws, timeout=5.0):
+    """receive_json() with a deadline.
+
+    TestClient's own receive() blocks forever on an empty queue, so a
+    regression that stops the broadcast would hang the suite instead of
+    failing it — the worst way for a test to report a bug. Reaching into
+    _send_queue is the only seam that takes a timeout; it mirrors receive()
+    exactly, including re-raising an exception the server put on the queue.
+    """
+    try:
+        message = ws._send_queue.get(timeout=timeout)
+    except queue.Empty:
+        raise AssertionError(
+            f"no websocket message within {timeout}s — the server scored the "
+            "batch but never pushed it"
+        )
+    if isinstance(message, BaseException):
+        raise message
+    ws._raise_on_close(message)
+    return json.loads(message["text"])
+
+
+def test_ingested_flows_reach_an_open_dashboard(client, org_a):
+    """Scored and stored is not the same as seen.
+
+    Flows posted by a collector agent used to land in the database and the
+    incident table without ever being pushed to a connected socket, so an
+    operator watching the live view saw nothing until they reloaded. The
+    simulator broadcast, so the gap only appeared in real deployments — the
+    exact configuration nobody demos.
+    """
+    with client.websocket_connect("/ws", cookies=org_a["cookies"]) as ws:
+        r = client.post("/api/ingest", cookies=org_a["cookies"], json={"flows": [{
+            "src_ip": "10.0.0.44", "dst_port": 443, "protocol": "TCP",
+            "node": "EDGE-01", "duration": 0.5, "packets": 40,
+            "total_bytes": 30000,
+        }]})
+        assert r.status_code == 200, r.text
+
+        flow = _ws_recv_json(ws)
+        assert flow["type"] == "flow"
+        assert flow["data"]["src_ip"] == "10.0.0.44"
+        assert flow["data"]["prediction"]  # scored, not echoed back raw
+
+        metric = _ws_recv_json(ws)
+        assert metric["type"] == "metric"
+        assert metric["data"]["phase"] == "live"
+    client.cookies.clear()
+
+
+def test_a_large_ingest_batch_does_not_flood_the_socket(client, org_a):
+    """The table is sampled to WS_FLOW_BURST; the metric point is not.
+
+    A batch can carry 500 flows and an exporter flush far more, while the
+    dashboard renders a few dozen rows. Trimming keeps a flood from spending
+    more time serialising JSON than scoring traffic, and the metric still
+    reflects the whole batch so the charts stay honest.
+    """
+    from backend.app.engine import WS_FLOW_BURST
+
+    batch = [
+        {"src_ip": f"10.9.0.{i % 250}", "dst_port": 443, "protocol": "TCP",
+         "node": "EDGE-01", "duration": 0.5, "packets": 40, "total_bytes": 30000}
+        for i in range(WS_FLOW_BURST + 20)
+    ]
+
+    with client.websocket_connect("/ws", cookies=org_a["cookies"]) as ws:
+        r = client.post("/api/ingest", cookies=org_a["cookies"],
+                        json={"flows": batch})
+        assert r.status_code == 200, r.text
+        assert r.json()["count"] == len(batch)
+
+        seen = 0
+        while True:
+            msg = _ws_recv_json(ws)
+            if msg["type"] == "metric":
+                break
+            seen += 1
+        assert seen == WS_FLOW_BURST
+    client.cookies.clear()
+
+
 def test_websocket_rejects_a_revoked_token(client, make_user):
     """Signing out must also kill the live stream, not just the HTTP session.
 
@@ -968,4 +1160,47 @@ def test_health_is_public(client):
     client.cookies.clear()
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json()["model"] is True
+    assert r.json()["status"] == "ok"
+
+
+def test_health_tells_a_stranger_nothing_useful(client):
+    """A public probe should not double as reconnaissance.
+
+    The version in particular is what an attacker wants: it maps the service
+    onto a list of published CVEs without them having to touch anything that
+    might be logged. The component breakdown is nearly as good — knowing the
+    database is unreachable tells them exactly when the service is least able
+    to cope.
+    """
+    client.cookies.clear()
+    body = client.get("/api/health").json()
+    assert set(body) == {"status"}, f"anonymous health leaked {set(body) - {'status'}}"
+
+
+def test_health_gives_operators_the_breakdown(client, org_a):
+    """The settings page renders these fields, so auth must unlock them."""
+    body = client.get("/api/health", cookies=org_a["cookies"]).json()
+    assert body["database"] is True
+    assert body["model"] is True
+    assert body["version"]
+    client.cookies.clear()
+
+
+def test_health_fails_the_probe_when_the_database_is_unreachable(client, monkeypatch):
+    """`curl -fsS` reads the status code and discards the body.
+
+    A 200 with {"status": "degraded"} is indistinguishable from a healthy
+    process to every probe that matters, so the container reported itself
+    healthy for as long as it stayed up, however broken it was.
+    """
+    from backend.app.routers import api as api_module
+
+    def _boom(*a, **kw):
+        raise RuntimeError("database is gone")
+
+    monkeypatch.setattr(api_module.Session, "execute", _boom, raising=False)
+
+    client.cookies.clear()
+    r = client.get("/api/health")
+    assert r.status_code == 503
+    assert r.json()["status"] == "degraded"

@@ -20,7 +20,7 @@ import random
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -100,6 +100,34 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+# Comfortably more than the dashboard's visible row count, so a normal batch
+# arrives whole and only a genuine flood gets trimmed. The simulator emits one
+# to three flows a tick and needs no cap, but /api/ingest accepts 500 at once
+# and an exporter can flush tens of thousands — forwarding all of them would
+# spend more time serialising JSON than scoring traffic.
+WS_FLOW_BURST = 50
+
+
+async def push_scored_batch(org_id: int, flows: List[Dict], point: Dict) -> None:
+    """Push a scored batch to that org's live dashboards.
+
+    Shared by the two real-traffic paths, /api/ingest and the NetFlow
+    collector. The flow table is sampled to the most recent WS_FLOW_BURST
+    because that is all the dashboard renders anyway; the metric point is
+    always sent, so the charts stay accurate even when the table is trimmed.
+    """
+    for f in flows[-WS_FLOW_BURST:]:
+        await manager.broadcast(org_id, {"type": "flow", "data": f})
+    await manager.broadcast(org_id, {
+        "type": "metric",
+        "data": {
+            "ts": int(time.time() * 1000),
+            "throughput": point.get("throughput", 0),
+            "threat": point.get("threat", 0),
+            "phase": "live",
+        },
+    })
 
 
 # ── synthetic traffic generator ───────────────────────────────────────────
@@ -394,6 +422,10 @@ def process_flows(
             flow_ref=raw.get("flow_ref") or f"FLW-{random.randint(100000, 999999)}",
             ts=ts,
             src_ip=raw.get("src_ip", "0.0.0.0"),
+            # Truncated rather than validated: an over-long or malformed address
+            # from a misbehaving exporter is a bad grouping key, not a reason to
+            # drop a flow that may be the only record of an attack.
+            dst_ip=str(raw.get("dst_ip") or "")[:45],
             dst_port=int(raw.get("dst_port", 0)),
             protocol=raw.get("protocol", "TCP"),
             node=raw.get("node", "unknown"),
@@ -588,35 +620,54 @@ def _ensure_node(db: Session, org_id: int, label: str) -> None:
 
 
 # ── background loop ───────────────────────────────────────────────────────
-# Key is org_id. Value is either CICIDSReplay or FlowGenerator, both expose
-# the same .tick(n) → List[Dict] and .phase int interface.
-_generators: Dict[int, object] = {}
+# Key is org_id. Value is (node_label_set, generator), where the generator is
+# either CICIDSReplay or FlowGenerator — both expose the same .tick(n) →
+# List[Dict] and .phase int interface. The label set is kept so a node added,
+# renamed or removed after the generator was built can be noticed.
+_generators: Dict[int, Tuple[FrozenSet[str], object]] = {}
 _stop = asyncio.Event()
 
 
 def _generator_for(db: Session, org_id: int) -> object:
-    """Return the right generator for this org.
+    """Return the right generator for this org, rebuilt if its nodes changed.
 
     Picks CICIDSReplay when SENTRY_CICIDS_DATA_DIR points at a directory that
     contains at least one *.csv file; falls back to the synthetic FlowGenerator
     otherwise. The fallback keeps development and CI working without needing the
     dataset downloaded.
+
+    The label set is re-read every tick and compared, rather than the cache
+    being invalidated by whoever changes a node. Nodes are auto-registered from
+    live traffic in `process_flows`, so the set can change without any explicit
+    node-management call to hook — a generator built once at startup would keep
+    emitting for a topology that no longer exists, and would never mention a
+    node a real collector had since reported. Re-reading is one small indexed
+    select per org per tick, against a tick that already runs model inference.
+
+    Compared as a set because the query has no ORDER BY and the generators only
+    ever sample from the labels; comparing a list would rebuild on row-order
+    churn alone, which would reset the attack-phase state machine every tick and
+    leave the dashboard story permanently stuck at quiet.
     """
-    if org_id not in _generators:
-        labels = list(
-            db.execute(select(Node.label).where(Node.org_id == org_id)).scalars()
-        )
-        data_dir = getattr(settings, "cicids_data_dir", None)
-        if data_dir and Path(data_dir).is_dir() and list(Path(data_dir).glob("*.csv")):
-            _generators[org_id] = CICIDSReplay(labels, data_dir)
-        else:
-            if data_dir:
-                print(
-                    f"[sentry] SENTRY_CICIDS_DATA_DIR={data_dir!r} set but no CSVs "
-                    f"found — using synthetic generator. Drop CIC-IDS2017 CSVs there."
-                )
-            _generators[org_id] = FlowGenerator(labels)
-    return _generators[org_id]
+    labels = frozenset(
+        db.execute(select(Node.label).where(Node.org_id == org_id)).scalars()
+    )
+    cached = _generators.get(org_id)
+    if cached is not None and cached[0] == labels:
+        return cached[1]
+
+    data_dir = getattr(settings, "cicids_data_dir", None)
+    if data_dir and Path(data_dir).is_dir() and list(Path(data_dir).glob("*.csv")):
+        gen = CICIDSReplay(sorted(labels), data_dir)
+    else:
+        if data_dir:
+            print(
+                f"[sentry] SENTRY_CICIDS_DATA_DIR={data_dir!r} set but no CSVs "
+                f"found — using synthetic generator. Drop CIC-IDS2017 CSVs there."
+            )
+        gen = FlowGenerator(sorted(labels))
+    _generators[org_id] = (labels, gen)
+    return gen
 
 
 def _trim_table(db: Session, model, org_id: int, keep: int) -> int:

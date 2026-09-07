@@ -132,8 +132,7 @@
           <div class="plain-detail" id="detail-${n}">
             <b>Source</b> ${esc(i.src_ip)} &nbsp;·&nbsp;
             <b>Seen on</b> ${esc(i.node)}<br />
-            <b>Model verdict</b> ${esc(ui.classMeta(i.label).label)}
-            at ${esc((i.peak_confidence * 100).toFixed(1))}% confidence<br />
+            ${ui.verdictLine(i)}<br />
             <b>Rated</b> ${esc(sev.label)} &nbsp;·&nbsp;
             <b>Connections</b> ${esc(fmt.num(i.flow_count))} &nbsp;·&nbsp;
             <b>Peak rate</b> ${esc(fmt.bytes(i.peak_bps))}<br />

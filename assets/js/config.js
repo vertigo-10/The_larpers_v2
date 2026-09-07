@@ -35,6 +35,26 @@ window.SENTRY_CLASSES = {
 
 window.SENTRY_BENIGN = "normal";
 
+/**
+ * Findings that did not come from the model.
+ *
+ * Kept out of SENTRY_CLASSES above, which is a mirror of the three labels the
+ * network can actually predict and has to stay that way — the flow-table class
+ * filter and the Model page's confusion matrix are both built from its keys,
+ * and a fourth entry would put a permanently-empty column in both.
+ *
+ * `scored: false` is what stops the alerts table printing "0%" in the
+ * confidence column for these. No model was consulted, so there is no
+ * probability; a zero would read as "the detector was completely unsure",
+ * which is the opposite of what a rule that fired means.
+ */
+window.SENTRY_DETECTIONS = {
+  slow_dos: {
+    label: "Slow DoS", short: "SLOW-DOS", color: "#c06cff",
+    tag: "bad", benign: false, scored: false
+  }
+};
+
 window.SENTRY_SEVERITY = {
   critical: { label: "Critical", color: "#ff5064" },
   high:     { label: "High",     color: "#ff7a45" },
