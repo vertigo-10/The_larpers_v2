@@ -838,6 +838,33 @@ body.auth { overflow: auto; display: grid; place-items: center; min-height: 100v
 .node-tile .figs { display: flex; gap: 18px; margin-top: 12px; }
 .node-tile .fig .k { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
 .node-tile .fig .v { font-family: var(--mono); font-size: 17px; margin-top: 4px; }
+
+/* The tile itself is a <button> that selects the node, so its manage controls
+   cannot live inside it — a button nested in a button is invalid HTML and
+   screen readers disagree about which one they are announcing. They sit as
+   siblings instead, positioned over the tile's top-right corner, which is why
+   the wrapper establishes a containing block. */
+.node-tile-wrap { position: relative; }
+.node-actions { position: absolute; top: 11px; right: 12px; display: flex; gap: 4px; }
+/* Reserved so the status chip cannot slide underneath the controls on a narrow
+   tile. Applied only when the controls are actually drawn, so a viewer — who
+   gets neither — keeps the full width for the chip. */
+.node-tile.has-actions .top { padding-right: 56px; }
+.node-act {
+  width: 24px; height: 24px; border-radius: 6px;
+  display: grid; place-items: center;
+  background: #0c1012; border: 1px solid var(--border-soft);
+  color: var(--muted); cursor: pointer;
+  /* Dimmed rather than hidden-until-hover. A control that only appears on hover
+     is undiscoverable by anyone who does not happen to hover, and unreachable
+     on a touchscreen. */
+  opacity: 0.55; transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.node-act:hover { opacity: 1; color: var(--text); border-color: var(--border); }
+.node-act:focus-visible { opacity: 1; outline: 2px solid var(--green); outline-offset: 1px; }
+.node-act.danger:hover { color: var(--red); border-color: rgba(255, 107, 107, 0.4); }
+.node-act svg { width: 12px; height: 12px; }
+
 .bar-track { height: 5px; border-radius: 3px; background: #1c2427; overflow: hidden; margin-top: 11px; }
 .bar-fill { height: 100%; border-radius: 3px; background: var(--green); transition: width 0.4s; }
 

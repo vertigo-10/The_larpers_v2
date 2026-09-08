@@ -453,6 +453,44 @@ def test_another_org_cannot_rename_or_delete_your_nodes(client, org_b):
     assert _node_by_label(client, cookies, "EDGE-01") is not None
 
 
+def test_an_analyst_may_rename_a_node_but_not_remove_it(client):
+    """The two node routes guard on different roles, and the UI draws on that.
+
+    `update_node` is require_operator (admin or analyst); `delete_node` is
+    require_admin. The nodes page shows the pencil to both and the bin only to
+    an admin, so if these two ever collapsed onto the same guard the page would
+    either hide a control that works or offer one that always 403s.
+    """
+    cookies = _node_org(client, "roles")
+    r = client.post("/api/team", cookies=cookies, json={
+        "email": "analyst@roles.nodes.example", "name": "Ana",
+        "role": "analyst", "password": GOOD_PW,
+    })
+    client.cookies.clear()
+    assert r.status_code == 201, r.text
+
+    r = client.post("/api/auth/login", json={
+        "email": "analyst@roles.nodes.example", "password": GOOD_PW})
+    assert r.status_code == 200, r.text
+    analyst = dict(client.cookies)
+    client.cookies.clear()
+
+    node = _node_by_label(client, cookies, "EDGE-01")
+
+    r = client.patch(f"/api/nodes/{node['id']}", cookies=analyst,
+                     json={"description": "renamed by an analyst"})
+    client.cookies.clear()
+    assert r.status_code == 200, r.text
+
+    r = client.delete(f"/api/nodes/{node['id']}", cookies=analyst)
+    client.cookies.clear()
+    assert r.status_code == 403
+
+    # Still there, so the refusal was real rather than a delete that reported
+    # failure after doing the work.
+    assert _node_by_label(client, cookies, "EDGE-01") is not None
+
+
 def test_node_rename_is_audited(client):
     cookies = _node_org(client, "audit")
     node = _node_by_label(client, cookies, "EDGE-01")

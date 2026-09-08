@@ -169,6 +169,13 @@
     getNodeTraffic: () => get("/api/analytics/nodes"),
     getPortActivity: () => get("/api/analytics/ports"),
     getNodes: () => get("/api/nodes"),
+    // Renaming rewrites `node` across every past flow and incident, because the
+    // label is stored on those rows as a string rather than a foreign key. So
+    // this is not a cosmetic edit and the caller should reload after it.
+    updateNode: (id, data) => patch(`/api/nodes/${id}`, data),
+    // Admin-only server-side. A node that is still exporting reappears on its
+    // own within a tick or two — see the confirm copy on the nodes page.
+    deleteNode: (id) => del(`/api/nodes/${id}`),
 
     // `window` is in minutes. The server caps it, so a caller cannot ask for a
     // range that would table-scan the whole flow history.

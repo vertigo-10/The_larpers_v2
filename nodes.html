@@ -63,6 +63,70 @@
   </div>
 </div>
 
+<div class="modal-back" id="edit-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="ico-edit"></span>
+      <span class="t">Rename this node</span>
+      <button class="x" id="edit-close"></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-error" id="edit-err"></div>
+      <div class="field">
+        <label for="e-label">Name</label>
+        <input type="text" id="e-label" class="mono" autocomplete="off" maxlength="60" />
+        <span class="hint">
+          Renaming carries the history with it: every flow and incident already
+          recorded under the old name is updated to the new one. The device is
+          the same device — only what we call it changed. Leaving those rows
+          behind would strand the node's past traffic under a name nothing
+          answers to, and the renamed node would read as newly installed.
+        </span>
+      </div>
+      <div class="field">
+        <label for="e-desc">Description</label>
+        <input type="text" id="e-desc" autocomplete="off" maxlength="200"
+               placeholder="e.g. upstairs switch, office uplink" />
+        <span class="hint">Optional. Shown under the name on the tile.</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="edit-cancel">Cancel</button>
+      <button class="btn btn-primary" id="edit-save">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-back" id="del-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="ico-del"></span>
+      <span class="t">Remove this node</span>
+      <button class="x" id="del-close"></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-error" id="del-err"></div>
+      <p style="font-size:12px;line-height:1.6;color:var(--text-dim)" id="del-blurb"></p>
+      <div class="field">
+        <label for="d-confirm">Type the node name to confirm</label>
+        <input type="text" id="d-confirm" class="mono" autocomplete="off" />
+        <span class="hint">
+          Its flows and incidents are kept. They are evidence of what happened
+          on the network, and taking a device off the inventory is not a claim
+          its traffic never occurred. Note that a node which is still sending
+          will register itself again within a tick or two — for a network
+          monitor, something still talking still exists. To actually stop
+          collecting from it, remove the device on the Exporters page.
+        </span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="del-cancel">Cancel</button>
+      <button class="btn btn-danger" id="del-confirm">Remove node</button>
+    </div>
+  </div>
+</div>
+
 <script src="assets/js/intro.js?v=20260836"></script>
 <script src="assets/js/config.js?v=20260836"></script>
 <script src="assets/js/api.js?v=20260836"></script>
