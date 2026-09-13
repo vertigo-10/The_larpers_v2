@@ -289,6 +289,10 @@ def list_flows(
         term = f"%{escaped}%"
         conditions = [
             Flow.src_ip.like(term, escape="\\"),
+            # An aggregate incident names the target it was aimed at, so the
+            # address in that sentence has to be a usable search term. Mirrored
+            # in the dashboard's client-side filter for live arrivals.
+            Flow.dst_ip.like(term, escape="\\"),
             Flow.node.like(term, escape="\\"),
             Flow.prediction.like(term, escape="\\"),
             Flow.flow_ref.like(term, escape="\\"),
@@ -303,6 +307,7 @@ def list_flows(
             "id": r.flow_ref,
             "ts": _ms(r.ts),
             "src_ip": r.src_ip,
+            "dst_ip": r.dst_ip,
             "dst_port": r.dst_port,
             "protocol": r.protocol,
             "node": r.node,

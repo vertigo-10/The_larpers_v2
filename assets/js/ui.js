@@ -549,6 +549,22 @@
       s = Number(s) || 0;
       return s < 1 ? `${(s * 1000).toFixed(0)} ms` : `${s.toFixed(2)} s`;
     },
+    /**
+     * Where a flow was headed, as `address:port`.
+     *
+     * Deliberately the same `host:port` phrasing the slow-DoS incident uses in
+     * its description, so an operator reading "held open against
+     * 10.20.4.38:8080" can scan the flow table for the identical string rather
+     * than mentally joining two columns.
+     *
+     * Many collectors never export a destination address, and flows recorded
+     * before the column existed have none either. Those fall back to the bare
+     * port instead of rendering a leading colon, which would read as a missing
+     * value rather than as a value that was never collected.
+     */
+    dest(ip, port) {
+      return ip ? `${ip}:${port}` : String(port);
+    },
     uptime(sec) {
       sec = Number(sec) || 0;
       const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);

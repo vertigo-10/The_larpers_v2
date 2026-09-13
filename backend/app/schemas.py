@@ -205,6 +205,10 @@ class FlowOut(BaseModel):
     id: str
     ts: int
     src_ip: str
+    # Empty string where the exporter never told us, matching FlowIn. Returned
+    # rather than hidden because the aggregate detectors report a target and the
+    # flow list is where an operator goes to corroborate it.
+    dst_ip: str = ""
     dst_port: int
     protocol: str
     node: str

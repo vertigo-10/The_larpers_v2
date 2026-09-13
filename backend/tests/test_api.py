@@ -932,7 +932,7 @@ def test_flow_search_treats_wildcards_as_literals(client, org_a):
     underscore = client.get("/api/flows", cookies=org_a["cookies"],
                             params={"q": "_"}).json()
     assert all(
-        "_" in (f["src_ip"] + f["node"] + f["prediction"] + f["id"])
+        "_" in (f["src_ip"] + f["dst_ip"] + f["node"] + f["prediction"] + f["id"])
         for f in underscore
     ), "_ matched a row containing no literal underscore"
     assert len(underscore) < len(everything), "_ behaved as a match-all"
@@ -941,6 +941,38 @@ def test_flow_search_treats_wildcards_as_literals(client, org_a):
     hit = client.get("/api/flows", cookies=org_a["cookies"],
                      params={"q": "10.55.55.55"}).json()
     assert any(f["src_ip"] == "10.55.55.55" for f in hit)
+
+
+def test_a_flow_reports_and_can_be_found_by_its_destination(client, org_a):
+    """The address an aggregate incident names has to be usable in the UI.
+
+    A slow-DoS incident's description is "N connections held open against
+    10.20.4.38:8080". If the flow list neither returned the destination nor
+    matched on it, that sentence would name something the operator could not
+    then look up — the one follow-up question the incident invites.
+    """
+    assert client.post("/api/ingest", cookies=org_a["cookies"], json={"flows": [{
+        "src_ip": "203.0.113.9", "dst_ip": "10.77.77.77", "dst_port": 8080,
+        "protocol": "TCP", "node": "DESTTEST", "duration": 61.0,
+        "packets": 4, "total_bytes": 300,
+    }]}).status_code == 200
+
+    hit = client.get("/api/flows", cookies=org_a["cookies"],
+                     params={"q": "10.77.77.77"}).json()
+    assert hit, "a flow could not be found by the address it was aimed at"
+    assert all(f["dst_ip"] == "10.77.77.77" for f in hit)
+
+    # Optional on the way in, so it must serialise as "" rather than vanish or
+    # come back null — the UI falls back to the bare port on the empty string.
+    assert client.post("/api/ingest", cookies=org_a["cookies"], json={"flows": [{
+        "src_ip": "203.0.113.10", "dst_port": 9099, "protocol": "TCP",
+        "node": "DESTTEST", "duration": 0.4, "packets": 3, "total_bytes": 200,
+    }]}).status_code == 200
+
+    rows = client.get("/api/flows", cookies=org_a["cookies"],
+                      params={"q": "203.0.113.10"}).json()
+    assert rows
+    assert rows[0]["dst_ip"] == ""
 
 
 def test_retention_bounds_flows_without_the_simulator(client, monkeypatch):

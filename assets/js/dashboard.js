@@ -259,7 +259,12 @@
     if (state.node !== "all" && flow.node !== state.node) return false;
     if (!state.classFilter.has(flow.prediction)) return false;
     if (state.query) {
-      const hay = `${flow.src_ip} ${flow.node} ${flow.prediction} ${flow.dst_port} ${flow.id}`;
+      // Kept in step with the server-side search in `list_flows`. If one side
+      // matched a destination address and the other did not, the same query
+      // would return different rows depending on whether a flow arrived over
+      // the socket or came back from the API.
+      const hay = `${flow.src_ip} ${flow.dst_ip || ""} ${flow.node} `
+        + `${flow.prediction} ${flow.dst_port} ${flow.id}`;
       if (hay.toLowerCase().indexOf(state.query.toLowerCase()) === -1) return false;
     }
     return true;
@@ -327,7 +332,7 @@
           </td>
           <td class="mono">${esc(f.src_ip)}</td>
           <td>${esc(f.node)}</td>
-          <td class="mono">${esc(f.dst_port)}</td>
+          <td class="mono">${esc(fmt.dest(f.dst_ip, f.dst_port))}</td>
           <td>${esc(f.protocol)}</td>
           <td class="mono">${esc(fmt.dur(f.duration))}</td>
           <td class="mono">${esc(fmt.num(f.packets))}</td>
@@ -460,7 +465,7 @@
   });
 
   el("btn-csv").addEventListener("click", () => {
-    const cols = ["id", "ts", "src_ip", "dst_port", "protocol", "node",
+    const cols = ["id", "ts", "src_ip", "dst_ip", "dst_port", "protocol", "node",
                   "duration", "packets", "bytes_per_sec", "prediction",
                   "confidence", "mitigated"];
     // Quote every field and double internal quotes — a node label containing a

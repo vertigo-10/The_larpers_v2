@@ -15,6 +15,7 @@ number.
 
 import asyncio
 import csv
+import ipaddress
 import math
 import random
 import time
@@ -237,9 +238,17 @@ class CICIDSReplay:
 
         node = random.choice(self.nodes)
 
+        # The dataset has no destination address column either, so this is
+        # synthesised like src_ip above. Derived from the port so one service
+        # keeps one address across the replay: a destination that changed every
+        # row would make the flows ungroupable by target and would quietly
+        # switch off every rule that reasons about who is being hit.
+        dst_ip = f"10.20.{dst_port % 5}.{(dst_port % 50) + 10}"
+
         return {
             "flow_ref": f"CIC-{seq}",
             "src_ip": src_ip,
+            "dst_ip": dst_ip,
             "dst_port": dst_port,
             "protocol": protocol,
             "node": node,
@@ -258,6 +267,7 @@ class CICIDSReplay:
             return [{
                 "flow_ref": f"SYN-{random.randint(10000,99999)}",
                 "src_ip": "0.0.0.0",
+                "dst_ip": "0.0.0.0",
                 "dst_port": 80,
                 "protocol": "TCP",
                 "node": self.nodes[0] if self.nodes else "EDGE-01",
@@ -300,6 +310,27 @@ class FlowGenerator:
         self.ticks = 0
         self.seq = random.randint(4000, 9000)
 
+        # A handful of services rather than one, so ordinary traffic spreads
+        # across destinations the way it really does. The slow-DoS rule groups
+        # on (source, destination, port); if everything shared one destination
+        # the only thing separating a campaign from background noise would be
+        # the source, and the rule's whole point is that the target matters.
+        self.targets = [
+            "10.20.%d.%d" % (random.randint(0, 4), random.randint(10, 60))
+            for _ in range(6)
+        ]
+
+        # A slow-DoS campaign, or None. Held apart from `phase` on purpose.
+        # `p_attack` indexes a three-entry dict by phase, so a phase 3 would
+        # raise KeyError; and the interesting demo is a campaign running *during*
+        # a quiet phase, where the throughput chart stays flat and the incident
+        # appears anyway. Folding it into the phase machine would have made the
+        # one case worth showing the one case it could not express.
+        self.slow_dos: Optional[Dict] = None
+        # Ticks until the first campaign. Short, because a demo that needs a
+        # ten-minute wait before the feature exists is a feature nobody sees.
+        self.slow_dos_cooldown = random.randint(25, 70)
+
     def _advance(self) -> None:
         if self.ticks > 0:
             self.ticks -= 1
@@ -308,6 +339,42 @@ class FlowGenerator:
         elif random.random() < 0.05:
             self.phase = 1 if random.random() < 0.6 else 2
             self.ticks = random.randint(8, 22)
+        self._advance_slow_dos()
+
+    def _advance_slow_dos(self) -> None:
+        """Start, sustain or retire the held-open-connection campaign.
+
+        The triple stays fixed for the campaign's whole life. That is the part
+        that matters: the detector counts flows per (source, target, port), so a
+        campaign that re-rolled its addresses each tick would scatter into
+        singleton groups and never reach SLOW_DOS_MIN_FLOWS no matter how many
+        flows it emitted.
+        """
+        if self.slow_dos is not None:
+            self.slow_dos["ticks"] -= 1
+            if self.slow_dos["ticks"] <= 0:
+                self.slow_dos = None
+                self.slow_dos_cooldown = random.randint(200, 500)
+            return
+
+        if self.slow_dos_cooldown > 0:
+            self.slow_dos_cooldown -= 1
+            return
+
+        # Length is set against the detector's window, not picked for feel. The
+        # baseline sweep looks at baseline_window_s (300s default) and the loop
+        # ticks every simulator_interval_ms (1200ms), so a window holds ~250
+        # ticks of 1-3 flows. At the emission rate below, the shortest campaign
+        # still lands ~90 flows inside one window against a threshold of 30 —
+        # enough margin that a campaign straddling two windows trips in both
+        # rather than falling just short in each.
+        self.slow_dos = {
+            "src_ip": self._external_ip(),
+            "dst_ip": random.choice(self.targets),
+            "dst_port": random.choice([80, 443, 443, 8080]),
+            "node": random.choice(self.nodes),
+            "ticks": random.randint(150, 300),
+        }
 
     @staticmethod
     def _ip(internal: bool = False) -> str:
@@ -318,8 +385,80 @@ class FlowGenerator:
             str(random.randint(0, 255)), str(random.randint(1, 254)),
         ])
 
+    def _external_ip(self) -> str:
+        """A source address that is actually routable on the public internet.
+
+        `_ip()` draws a first octet in 11-223, which is mostly public space but
+        also covers 100.64/10 carrier NAT, 127/8, 169.254/16, 172.16/12,
+        192.168/16, 198.18/15 and the 192.0.2 / 198.51.100 / 203.0.113
+        documentation ranges. The slow-DoS rule drops any group whose source is
+        not `is_global`, so a campaign that happened to draw one of those would
+        emit every flow, hold every connection, and then be discarded at the
+        final filter — a demo that fails perhaps one run in twenty with nothing
+        in the logs to say why.
+
+        Tested with the same `is_global` predicate the detector uses rather than
+        by excluding octet ranges by hand, so the two cannot drift apart if
+        Python's registry of special-purpose blocks is updated.
+        """
+        for _ in range(20):
+            candidate = self._ip()
+            if ipaddress.ip_address(candidate).is_global:
+                return candidate
+        # 45.0.0.0/8 is ordinary public unicast. Reached only if twenty
+        # independent draws all miss, which needs about one chance in 10^13.
+        return "45.%d.%d.%d" % (
+            random.randint(0, 255), random.randint(0, 255), random.randint(1, 254))
+
+    def _slow_dos_flow(self) -> Dict:
+        """One held-open connection from the running campaign.
+
+        `truth` is "normal", and that is not a shortcut. `truth` records what
+        the generator intended so the Model page can show a real agreement rate,
+        and it feeds the confusion matrix. Judged as a single flow in isolation
+        — which is all the six features can express — a 60-second connection
+        carrying 300 bytes genuinely is unremarkable, and the model says so.
+        Labelling these "dos_ddos" would score the model wrong for giving the
+        right answer to the question it was asked.
+
+        That is the whole demonstration: every flow here is correctly classified
+        and the attack is still an attack. It is visible only in the count of
+        connections one source holds against one service, which no per-flow
+        classifier can see, and which is why the rule exists alongside the model
+        instead of being folded into it.
+        """
+        campaign = self.slow_dos
+        self.seq += 1
+        # Comfortably past SLOW_DOS_MIN_MEAN_DURATION_S (30s) and inside the
+        # band where the model still reads these as normal — past about three
+        # minutes duration alone starts tipping it to dos_ddos.
+        duration = random.uniform(45.0, 90.0)
+        packets = random.randint(3, 6)
+        return {
+            "flow_ref": f"FLW-{self.seq}",
+            "src_ip": campaign["src_ip"],
+            "dst_ip": campaign["dst_ip"],
+            "dst_port": campaign["dst_port"],
+            "protocol": "TCP",
+            "node": campaign["node"],
+            "duration": round(duration, 4),
+            "packets": packets,
+            # A request header dribbled out and nothing else: a few hundred
+            # bytes against a 2048-byte ceiling, and roughly 0.07 packets/sec
+            # against a limit of 2.
+            "total_bytes": round(packets * random.uniform(60, 90), 1),
+            "truth": "normal",
+        }
+
     def next_flow(self) -> Dict:
         """One flow. `truth` is the generator's intent, not a model output."""
+        # Campaign traffic displaces some of the ordinary mix rather than being
+        # added on top, so a slow DoS does not announce itself as a bump in
+        # flow volume. Held-open connections are cheap for the attacker; the
+        # point is that the throughput chart barely moves.
+        if self.slow_dos is not None and random.random() < 0.45:
+            return self._slow_dos_flow()
+
         p_attack = {0: 0.06, 1: 0.42, 2: 0.72}[self.phase]
         roll = random.random()
 
@@ -351,6 +490,7 @@ class FlowGenerator:
         return {
             "flow_ref": f"FLW-{self.seq}",
             "src_ip": self._ip(internal=truth == "normal" and random.random() < 0.35),
+            "dst_ip": random.choice(self.targets),
             "dst_port": port,
             "protocol": proto,
             "node": random.choice(self.nodes),
@@ -491,6 +631,11 @@ def process_flows(
             "id": flow.flow_ref,
             "ts": int(ts.timestamp() * 1000),
             "src_ip": flow.src_ip,
+            # Carried on the wire because a slow-DoS incident reports the target
+            # it was aimed at, and an operator reading "held open against
+            # 10.20.4.38:8080" has to be able to find those flows. Empty string
+            # when the exporter never sent one.
+            "dst_ip": flow.dst_ip,
             "dst_port": flow.dst_port,
             "protocol": flow.protocol,
             "node": flow.node,

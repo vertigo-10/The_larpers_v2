@@ -179,7 +179,7 @@
             </div>
           </td>
           <td class="mono">${esc(f.src_ip)}</td>
-          <td class="mono">${esc(f.dst_port)}</td>
+          <td class="mono">${esc(fmt.dest(f.dst_ip, f.dst_port))}</td>
           <td>${esc(f.protocol)}</td>
           <td class="mono">${esc(fmt.num(f.packets))}</td>
           <td class="mono">${esc(fmt.bytes(f.bytes_per_sec))}</td>
