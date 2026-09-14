@@ -269,7 +269,7 @@ backend/
       auth.py           signup, login, logout, profile, password
       team.py           member management, audit log, collector keys
       api.py            flows, incidents, analytics, settings, reports
-  tests/                337 tests, no network or root required
+  tests/                468 tests, no network or root required
 agent/
   sentry_collector.py   packet capture → flow aggregation → POST /api/ingest
   requirements.txt      scapy + requests only, deliberately not the backend's

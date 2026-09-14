@@ -552,10 +552,15 @@ the durable record everything else is evidence for.
   a loud boot warning if it detects this.
 - URL must begin `postgresql+psycopg://`, not `postgresql://` — SQLAlchemy 2.0
   reads the bare form as a request for psycopg2, which is not installed.
-- **`SENTRY_ENV=production` must be set**, which turns the traffic simulator off.
-  Otherwise synthetic flows appear alongside real ones and an operator cannot
-  tell a fabricated incident from a real one.
-- **340 automated tests**, `.venv/bin/python -m pytest backend/tests -q`.
+- **`SENTRY_ENV=production` must be set.** It turns the traffic simulator off,
+  but only as a *default*: `SENTRY_SIMULATOR_ENABLED` overrides it when set
+  explicitly, and a deployment carrying that variable from an earlier demo will
+  run the simulator in production while looking correctly configured in every
+  other respect. Check both. Otherwise synthetic flows appear alongside real
+  ones and an operator cannot tell a fabricated incident from a real one — the
+  app prints a boot warning when it detects exactly this, so the Render log
+  says so even when the dashboard does not.
+- **468 automated tests**, `.venv/bin/python -m pytest backend/tests -q`.
 
 ---
 
